@@ -54,6 +54,21 @@ LightGlue Dynamo CLI
 
 Pass `--help` to see the available options for each command. The CLI will export the full extractor-matcher pipeline so that you don't have to worry about orchestrating intermediate steps.
 
+## Install
+```
+poetry install
+source .venv/bin/activate
+```
+
+```
+export CUDA_VERSION=12.6 
+bash ./install_cusparselt.sh
+```
+
+```
+pip install --no-cache https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl
+export PYTHONPATH=/usr/lib/python3.10/dist-packages:$PYTHONPATH # to enable tensorrt in virtualenv
+```
 ## 📖 Example Commands
 
 <details>

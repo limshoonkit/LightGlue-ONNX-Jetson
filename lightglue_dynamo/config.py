@@ -1,17 +1,27 @@
-from enum import StrEnum, auto
+from enum import Enum
 from typing import Any
 
 
-class InferenceDevice(StrEnum):
-    cpu = auto()
-    cuda = auto()
-    tensorrt = auto()
-    openvino = auto()
+class InferenceDevice(str, Enum):
+    # Explicitly assign the string value instead of using auto()
+    cpu = "cpu"
+    cuda = "cuda"
+    tensorrt = "tensorrt"
+    openvino = "openvino"
+
+    def __str__(self) -> str:
+        """Return the string value of the enum member."""
+        return self.value
 
 
-class Extractor(StrEnum):
-    superpoint = auto()
-    disk = auto()
+class Extractor(str, Enum):
+    # Explicitly assign the string value instead of using auto()
+    superpoint = "superpoint"
+    disk = "disk"
+
+    def __str__(self) -> str:
+        """Return the string value of the enum member."""
+        return self.value
 
     @property
     def input_dim_divisor(self) -> int:

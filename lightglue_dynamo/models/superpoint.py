@@ -75,6 +75,7 @@ class SuperPoint(nn.Module):
     """
 
     weights_url = "https://github.com/cvg/LightGlue/releases/download/v0.1_arxiv/superpoint_v1.pth"
+    # weights_url = "weights/superpoint_v6_from_tf.pth"
 
     def __init__(
         self,
@@ -115,6 +116,11 @@ class SuperPoint(nn.Module):
         self.convDb = nn.Conv2d(c5, self.descriptor_dim, kernel_size=1, stride=1, padding=0)
 
         self.load_state_dict(torch.hub.load_state_dict_from_url(self.weights_url))
+        # state_dict = torch.load(self.weights_url, map_location=lambda storage, loc: storage)
+        # print(f"Loading SuperPoint weights from {self.weights_url}")
+        # print(f"State dict keys: {list(state_dict.keys())}")
+        # self.load_state_dict(state_dict)
+
 
     def forward(
         self,
