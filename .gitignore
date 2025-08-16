@@ -6,6 +6,7 @@
 *.profile
 *.timing
 data
+calib_images/
 megadepth_test_1500
 
 # VSCode

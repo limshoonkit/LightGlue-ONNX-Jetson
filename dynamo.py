@@ -9,6 +9,46 @@ from lightglue_dynamo.config import Extractor, InferenceDevice
 
 app = typer.Typer()
 
+import numpy as np
+from pathlib import Path
+from typing import Optional, Annotated, Iterable, Dict, Any
+
+from lightglue_dynamo.config import Extractor
+from lightglue_dynamo.preprocessors import DISKPreprocessor, SuperPointPreprocessor
+
+def calib_data_loader(
+    calib_dir: Path, height: int, width: int, extractor_type: Extractor
+) -> Iterable[Dict[str, Any]]:
+    """
+    Generator that loads and preprocesses calibration image pairs.
+    Yields data in the format required by Polygraphy's Calibrator.
+    """
+    print(f"Loading calibration data from: {calib_dir}")
+    left_images = sorted(calib_dir.glob("*_left.png"))
+    if not left_images:
+        raise ValueError(f"No '*_left.png' files found in {calib_dir}")
+
+    for left_path in left_images:
+        right_path = left_path.parent / left_path.name.replace("_left.png", "_right.png")
+        if not right_path.exists():
+            print(f"Warning: Corresponding right image not found for {left_path.name}, skipping pair.")
+            continue
+
+        raw_images = [
+            cv2.resize(cv2.imread(str(p)), (width, height)) for p in [left_path, right_path]
+        ]
+        images = np.stack(raw_images)
+
+        # Apply the same preprocessing as the main inference path
+        match extractor_type:
+            case Extractor.superpoint:
+                images = SuperPointPreprocessor.preprocess(images)
+            case Extractor.disk:
+                images = DISKPreprocessor.preprocess(images)
+        images = images.astype(np.float32)
+
+        # Polygraphy calibrator expects a dictionary mapping input names to numpy arrays
+        yield {"images": images}
 
 @app.callback()
 def callback():
@@ -231,12 +271,20 @@ def trtexec(
         typer.Option("-w", "--width", min=1, help="Width of input image at which to perform inference."),
     ] = 1024,
     fp16: Annotated[bool, typer.Option("--fp16", help="Whether model uses FP16 precision.")] = False,
+    fp8: Annotated[bool, typer.Option("--fp8", help="Whether model uses FP8 precision.")] = False,
+    int8: Annotated[bool, typer.Option("--int8", help="Whether model uses INT8 precision.")] = False,
+    calib_cache: Annotated[Optional[Path], typer.Option("--calib-cache", help="Path to calibration cache for INT8.")] = None,
+    calib_image_dir: Annotated[Optional[Path], typer.Option("--calib-image-dir", exists=True, file_okay=False, help="Path to INT8 calibration images.")] = None,
     profile: Annotated[bool, typer.Option("--profile", help="Whether to profile model execution.")] = False,
+    debug: Annotated[bool, typer.Option("--debug", help="Print debug information.")] = False,
+    use_dla: Annotated[bool, typer.Option("--use-dla", help="Use DLA for inference if available.")] = False,
+    allow_gpu_fallback: Annotated[bool, typer.Option("--allow-gpu-fallback", help="Use GPU fallback for DLA.")] = True,
 ):
     """Run pure TensorRT inference for LightGlue model using Polygraphy (requires TensorRT to be installed)."""
     import numpy as np
     from polygraphy.backend.common import BytesFromPath
     from polygraphy.backend.trt import (
+        Calibrator,
         CreateConfig,
         EngineFromBytes,
         EngineFromNetwork,
@@ -246,24 +294,66 @@ def trtexec(
     )
 
     from lightglue_dynamo import viz
-    from lightglue_dynamo.preprocessors import DISKPreprocessor, SuperPointPreprocessor
 
     raw_images = [left_image_path, right_image_path]
     raw_images = [cv2.resize(cv2.imread(str(i)), (width, height)) for i in raw_images]
     images = np.stack(raw_images)
+
+    print(f"Raw images shape: {images.shape}")
+    print(f"Raw images dtype: {images.dtype}")
+    print(f"Raw images range: [{images.min()}, {images.max()}]")
+
     match extractor_type:
         case Extractor.superpoint:
             images = SuperPointPreprocessor.preprocess(images)
         case Extractor.disk:
             images = DISKPreprocessor.preprocess(images)
     images = images.astype(np.float32)
+    print(f"Preprocessed images shape: {images.shape}")
+    print(f"Preprocessed images dtype: {images.dtype}")
+    print(f"Preprocessed images range: [{images.min()}, {images.max()}]")
+
+    print("Python input tensor debug:")
+    for batch_idx in range(images.shape[0]):
+        print(f"Batch {batch_idx} first 10 values:")
+        flat_batch = images[batch_idx].flatten()
+        for i in range(min(10, len(flat_batch))):
+            print(f"  [{i}] = {flat_batch[i]:.6f}")
+        
+        print(f"Batch {batch_idx}: min={flat_batch.min():.6f}, max={flat_batch.max():.6f}")
 
     # Build TensorRT engine
     if model_path.suffix == ".engine":
         build_engine = EngineFromBytes(BytesFromPath(str(model_path)))
     else:  # .onnx
-        build_engine = EngineFromNetwork(NetworkFromOnnxPath(str(model_path)), config=CreateConfig(fp16=fp16))
-        build_engine = SaveEngine(build_engine, str(model_path.with_suffix(".engine")))
+        calibrator = None
+        if int8:
+            if calib_image_dir is None:
+                raise typer.Exit("Error: --calib-image-dir must be provided for INT8 quantization.")
+            
+            # Create the data loader for calibration
+            data_loader = calib_data_loader(calib_image_dir, height, width, extractor_type)
+            
+            # Use the data loader with the calibrator
+            calibrator = Calibrator(
+                data_loader=data_loader,
+                cache=str(calib_cache) if calib_cache else None
+            )
+
+        build_engine = EngineFromNetwork(
+            NetworkFromOnnxPath(str(model_path)), 
+            config=CreateConfig(
+                fp16=fp16, 
+                fp8=fp8,
+                int8=int8,
+                calibrator=calibrator,
+                use_dla=use_dla, 
+                allow_gpu_fallback=allow_gpu_fallback,
+            )
+        )
+        engine_path = str(model_path.with_suffix(".engine"))
+        build_engine = SaveEngine(build_engine, engine_path)
+        print(f"TensorRT engine built and saved to: {engine_path}")
 
     with TrtRunner(build_engine) as runner:
         for _ in range(10 if profile else 1):  # Warm-up if profiling
@@ -273,13 +363,45 @@ def trtexec(
         if profile:
             typer.echo(f"Inference Time: {runner.last_inference_time():.3f} s")
 
+    if debug:
+        print("\n=== PYTHON OUTPUT DEBUG ===")
+        print(f"Keypoints shape: {keypoints.shape}")
+        print(f"Matches shape: {matches.shape}")
+        print(f"MScores shape: {mscores.shape}")
+
+        print(f"Keypoints dtype: {keypoints.dtype}")
+        print(f"Keypoints range: [{keypoints.min():.6f}, {keypoints.max():.6f}]")
+
+        # Print first 20 keypoints for each batch (same as C++)
+        print("Python keypoints batch 0:")
+        for i in range(20):
+            if i < keypoints.shape[1]:  # Check bounds
+                x = keypoints[0, i, 0]
+                y = keypoints[0, i, 1]
+                print(f"  [{i}] x={x:.2f}, y={y:.2f}")
+
+        print("Python keypoints batch 1:")
+        for i in range(20):
+            if i < keypoints.shape[1]:  # Check bounds
+                x = keypoints[1, i, 0]
+                y = keypoints[1, i, 1]
+                print(f"  [{i}] x={x:.2f}, y={y:.2f}")
+
+        print(f"Total matches: {matches.shape[0]}")
+        print(f"Match scores range: [{mscores.min():.6f}, {mscores.max():.6f}]")
+
+    # Check if keypoints are all zeros
+    batch0_nonzero = np.count_nonzero(keypoints[0])
+    batch1_nonzero = np.count_nonzero(keypoints[1])
+    print(f"Batch 0 non-zero keypoint values: {batch0_nonzero}")
+    print(f"Batch 1 non-zero keypoint values: {batch1_nonzero}")
+
     viz.plot_images(raw_images)
     viz.plot_matches(keypoints[0][matches[..., 1]], keypoints[1][matches[..., 2]], color="lime", lw=0.2)
     if output_path is None:
         viz.plt.show()
     else:
         viz.save_plot(output_path)
-
 
 if __name__ == "__main__":
     app()

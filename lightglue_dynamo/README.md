@@ -117,37 +117,6 @@ python dynamo.py trtexec \
 </pre>
 </details>
 
-```
-python dynamo.py export superpoint \
-  --num-keypoints 256 \
-  -b 2 -h 400 -w 640 \
-  -o weights/superpoint_lightglue_b2_h400_w640_kp256.onnx
-```
-
-does not work
-```
-python cast_onnx.py # change path
-python dynamo.py trtexec \
-  weights/superpoint_lightglue.onnx \
-  assets/debug1.png assets/debug2.png \
-  superpoint \
-  -h 400 -w 640 \
-  --int8 \
-  --calib-image-dir calib_images/ \
-  --calib-cache weights/calib.cache \
-  --profile
-```
-
-```
-python dynamo.py trtexec \
-  weights/superpoint_lightglue_b2_h400_w640_kp256.onnx \
-  assets/debug1.png assets/debug2.png \
-  superpoint \
-  -h 400 -w 640 \
-  --fp16 \
-  --profile
-```
-
 <details>
 <summary>🟣 ONNX Runtime Inference (OpenVINO)</summary>
 <pre>
