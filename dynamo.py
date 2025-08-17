@@ -84,7 +84,7 @@ def export(
             help="Fuse multi-head attention subgraph into one optimized operation. (ONNX Runtime-only).",
         ),
     ] = False,
-    opset: Annotated[int, typer.Option(min=16, max=20, help="ONNX opset version of exported model.")] = 17,
+    opset: Annotated[int, typer.Option(min=16, max=20, help="ONNX opset version of exported model.")] = 19,
     fp16: Annotated[bool, typer.Option("--fp16", help="Whether to also convert to FP16.")] = False,
 ):
     """Export LightGlue to ONNX."""
@@ -270,6 +270,8 @@ def trtexec(
         int,
         typer.Option("-w", "--width", min=1, help="Width of input image at which to perform inference."),
     ] = 1024,
+    tf32: Annotated[bool, typer.Option("--tf32", help="Whether model uses TF32 precision.")] = False,
+    bf16: Annotated[bool, typer.Option("--bf16", help="Whether model uses BF16 precision.")] = False,
     fp16: Annotated[bool, typer.Option("--fp16", help="Whether model uses FP16 precision.")] = False,
     fp8: Annotated[bool, typer.Option("--fp8", help="Whether model uses FP8 precision.")] = False,
     int8: Annotated[bool, typer.Option("--int8", help="Whether model uses INT8 precision.")] = False,
@@ -343,7 +345,9 @@ def trtexec(
         build_engine = EngineFromNetwork(
             NetworkFromOnnxPath(str(model_path)), 
             config=CreateConfig(
-                fp16=fp16, 
+                tf32=tf32,
+                fp16=fp16,
+                bf16=bf16, 
                 fp8=fp8,
                 int8=int8,
                 calibrator=calibrator,

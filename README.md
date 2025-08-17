@@ -119,9 +119,9 @@ python dynamo.py trtexec \
 
 ```
 python dynamo.py export superpoint \
-  --num-keypoints 256 \
+  --num-keypoints 128 \
   -b 2 -h 400 -w 640 \
-  -o weights/superpoint_lightglue_b2_h400_w640_kp256.onnx
+  -o weights/superpoint_lightglue_b2_h400_w640_kp128.onnx
 ```
 
 does not work
@@ -140,7 +140,7 @@ python dynamo.py trtexec \
 
 ```
 python dynamo.py trtexec \
-  weights/superpoint_lightglue_b2_h400_w640_kp256.onnx \
+  weights/superpoint_lightglue_b2_h400_w640_kp128.onnx \
   assets/debug1.png assets/debug2.png \
   superpoint \
   -h 400 -w 640 \
