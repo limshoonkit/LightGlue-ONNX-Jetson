@@ -117,14 +117,23 @@ python dynamo.py trtexec \
 </pre>
 </details>
 
+1. SP+LG pipeline
 ```
 python dynamo.py export superpoint \
-  --num-keypoints 128 \
+  --num-keypoints 256 \
   -b 2 -h 400 -w 640 \
-  -o weights/superpoint_lightglue_b2_h400_w640_kp128.onnx
+  -o weights/superpoint_lightglue_b2_h400_w640_kp256.onnx
 ```
 
-does not work
+2. SP only (MIT License)
+```
+python dynamo.py export superpoint_open \
+  --num-keypoints 256 \
+  -b 2 -h 400 -w 640 \
+  -o weights/superpoint_open_b2_h400_w640_kp256.onnx
+```
+
+3. Note: Does not work for INT8
 ```
 python cast_onnx.py # change path
 python dynamo.py trtexec \
@@ -138,6 +147,7 @@ python dynamo.py trtexec \
   --profile
 ```
 
+4. Export engine
 ```
 python dynamo.py trtexec \
   weights/superpoint_lightglue_b2_h400_w640_kp128.onnx \
@@ -145,6 +155,17 @@ python dynamo.py trtexec \
   superpoint \
   -h 400 -w 640 \
   --fp16 \
+  --profile
+```
+
+```
+python dynamo.py trtexec \
+  weights/superpoint_open_b2_h400_w640_kp256.onnx \
+  assets/debug1.png assets/debug2.png \
+  superpoint_open \
+  -h 400 -w 640 \
+  --fp16 \
+  --use-dla \
   --profile
 ```
 

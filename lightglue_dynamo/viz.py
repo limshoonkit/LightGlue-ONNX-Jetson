@@ -42,6 +42,32 @@ def plot_images(imgs, titles=None, cmaps="gray", dpi=100, pad=0.5, adaptive=True
             ax[i].set_title(titles[i])
     fig.tight_layout(pad=pad)
 
+def plot_sp_open(images, batch_size, kpts, num_kpts):
+    import cv2
+    output_images = []
+    for i in range(batch_size):
+        # Get the valid keypoints for this image using num_keypoints
+        num = num_kpts[i]
+        kpts_i = kpts[i, :num, :]
+        
+        # Convert keypoints to OpenCV's format
+        # cv2.KeyPoint(x, y, size)
+        cv_kpts = [cv2.KeyPoint(p[0], p[1], 5) for p in kpts_i]
+        
+        # Draw keypoints on the image
+        img_with_kpts = cv2.drawKeypoints(images[i], cv_kpts, None, color=(0, 255, 0))
+        output_images.append(img_with_kpts)
+
+    # Combine images side-by-side
+    combined_image = np.hstack(output_images)
+
+    # Display using matplotlib (more portable than cv2.imshow)
+    plt.figure(figsize=(16, 8))
+    # OpenCV loads as BGR, matplotlib displays as RGB
+    plt.imshow(cv2.cvtColor(combined_image, cv2.COLOR_BGR2RGB))
+    plt.title('SuperPoint Keypoints')
+    plt.axis('off')
+    plt.show()
 
 def plot_keypoints(kpts, colors="lime", ps=4, axes=None, a=1.0):
     """Plot keypoints for existing images.
@@ -58,7 +84,6 @@ def plot_keypoints(kpts, colors="lime", ps=4, axes=None, a=1.0):
         axes = plt.gcf().axes
     for ax, k, c, alpha in zip(axes, kpts, colors, a, strict=False):
         ax.scatter(k[:, 0], k[:, 1], c=c, s=ps, linewidths=0, alpha=alpha)
-
 
 def plot_matches(kpts0, kpts1, color=None, lw=1.5, ps=4, a=1.0, labels=None, axes=None):
     """Plot matches for a pair of existing images.

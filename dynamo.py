@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional, Annotated, Iterable, Dict, Any
 
 from lightglue_dynamo.config import Extractor
-from lightglue_dynamo.preprocessors import DISKPreprocessor, SuperPointPreprocessor
+from lightglue_dynamo.preprocessors import DISKPreprocessor, SuperPointPreprocessor, SuperPointOpenPreprocessor
 
 def calib_data_loader(
     calib_dir: Path, height: int, width: int, extractor_type: Extractor
@@ -43,6 +43,8 @@ def calib_data_loader(
         match extractor_type:
             case Extractor.superpoint:
                 images = SuperPointPreprocessor.preprocess(images)
+            case Extractor.superpoint_open:
+                images = SuperPointOpenPreprocessor.preprocess(images)
             case Extractor.disk:
                 images = DISKPreprocessor.preprocess(images)
         images = images.astype(np.float32)
@@ -86,9 +88,6 @@ def export(
     ] = False,
     opset: Annotated[int, typer.Option(min=16, max=20, help="ONNX opset version of exported model.")] = 17,
     fp16: Annotated[bool, typer.Option("--fp16", help="Whether to also convert to FP16.")] = False,
-    extractor_only: Annotated[
-        bool, typer.Option("--extractor-only", help="Export only the feature extractor model.")
-    ] = False,
 ):
     """Export LightGlue to ONNX."""
     import onnx
@@ -113,10 +112,6 @@ def export(
         case Extractor.disk:
             extractor = DISK(num_keypoints=num_keypoints)
 
-    if output is None:
-        suffix = "extractor" if extractor_only else "lightglue_pipeline"
-        output = Path(f"weights/{extractor_type}_{suffix}.onnx")
-
     check_multiple_of(height, extractor_type.input_dim_divisor)
     check_multiple_of(width, extractor_type.input_dim_divisor)
 
@@ -125,41 +120,47 @@ def export(
 
     dummy_input = torch.zeros(batch_size or 2, extractor_type.input_channels, height or 256, width or 256)
 
-    if extractor_only:
+    if extractor_type == Extractor.superpoint_open:
         typer.echo(f"Exporting {extractor_type} extractor...")
 
-        # Wrapper to convert dict output to a tuple for ONNX export
         class ExtractorWrapper(torch.nn.Module):
             def __init__(self, model):
                 super().__init__()
                 self.model = model
+
             def forward(self, image):
-                preds = self.model(image)
-                return preds['keypoints'], preds['scores'], preds['descriptors']
+                preds = self.model({"image": image})
+
+                return (
+                    preds["keypoints"],
+                    preds["keypoint_scores"],
+                    preds["descriptors"],
+                    preds["num_keypoints"],
+                )
 
         model_to_export = ExtractorWrapper(extractor).eval()
-        output_names = ["keypoints", "keypoint_scores", "descriptors"]
+        
+        output_names = ["keypoints", "keypoint_scores", "descriptors", "num_keypoints"]
+        
         dynamic_axes = {
             "images": {},
             "keypoints": {},
             "keypoint_scores": {},
             "descriptors": {},
+            "num_keypoints": {},
         }
+        
         if batch_size == 0:
             dynamic_axes["images"][0] = "batch_size"
             dynamic_axes["keypoints"][0] = "batch_size"
             dynamic_axes["keypoint_scores"][0] = "batch_size"
             dynamic_axes["descriptors"][0] = "batch_size"
-
-        dynamic_axes["keypoints"][1] = "num_keypoints"
-        dynamic_axes["keypoint_scores"][1] = "num_keypoints"
-        dynamic_axes["descriptors"][1] = "num_keypoints"
+            dynamic_axes["num_keypoints"][0] = "batch_size"
 
     else:
         typer.echo(f"Exporting {extractor_type} pipeline...")
-        if not extractor_only:
-            check_multiple_of(batch_size, 2)
 
+        check_multiple_of(batch_size, 2)
         matcher = LightGlue(**extractor_type.lightglue_config)
         model_to_export = Pipeline(extractor, matcher).eval()
 
@@ -179,15 +180,11 @@ def export(
         if width == 0:
             dynamic_axes["images"][3] = "width"
 
-        if extractor_type == Extractor.superpoint_open:
-            typer.echo(f"SuperPoint-Open only supports extactor-only mode. Enable --extractor-only.")
-            return
-        else:
-            output_names = ["keypoints", "matches", "mscores"]
-            dynamic_axes["keypoints"] = {}
-            if batch_size == 0:
-                dynamic_axes["keypoints"][0] = "batch_size"
-            dynamic_axes |= {"matches": {0: "num_matches"}, "mscores": {0: "num_matches"}}
+        output_names = ["keypoints", "matches", "mscores"]
+        dynamic_axes["keypoints"] = {}
+        if batch_size == 0:
+            dynamic_axes["keypoints"][0] = "batch_size"
+        dynamic_axes |= {"matches": {0: "num_matches"}, "mscores": {0: "num_matches"}}
 
     torch.onnx.export(
         model_to_export,
@@ -251,7 +248,7 @@ def infer(
     import onnxruntime as ort
 
     from lightglue_dynamo import viz
-    from lightglue_dynamo.preprocessors import DISKPreprocessor, SuperPointPreprocessor
+    from lightglue_dynamo.preprocessors import DISKPreprocessor, SuperPointPreprocessor, SuperPointOpenPreprocessor
 
     raw_images = [left_image_path, right_image_path]
     raw_images = [cv2.resize(cv2.imread(str(i)), (width, height)) for i in raw_images]
@@ -259,6 +256,8 @@ def infer(
     match extractor_type:
         case Extractor.superpoint:
             images = SuperPointPreprocessor.preprocess(images)
+        case Extractor.superpoint_open:
+            images = SuperPointOpenPreprocessor.preprocess(images)
         case Extractor.disk:
             images = DISKPreprocessor.preprocess(images)
     images = images.astype(np.float16 if fp16 and device != InferenceDevice.tensorrt else np.float32)
@@ -291,10 +290,23 @@ def infer(
     session = ort.InferenceSession(model_path, session_options, providers)
 
     for _ in range(100 if profile else 1):
-        keypoints, matches, mscores = session.run(None, {"images": images})
+        outputs = session.run(None, {"images": images})
 
-    viz.plot_images(raw_images)
-    viz.plot_matches(keypoints[0][matches[..., 1]], keypoints[1][matches[..., 2]], color="lime", lw=0.2)
+    if extractor_type == Extractor.superpoint_open:
+        typer.echo("Visualizing keypoints from SuperPointOpen extractor.")
+        kpts, scores, descriptors, num_kpts = outputs
+        print(f"Keypoints: {kpts.shape}")
+        print(f"Keypoint scores: {scores.shape}")
+        print(f"Descriptors: {descriptors.shape}")
+        print(f"Number of keypoints: {num_kpts.shape}")
+        viz.plot_sp_open(raw_images, images.shape[0], kpts, num_kpts)
+    else:
+        # Full pipeline model: outputs are [keypoints, matches, mscores]
+        viz.plot_images(raw_images)
+        typer.echo("Visualizing matches from LightGlue pipeline.")
+        keypoints, matches, mscores = outputs
+        viz.plot_matches(keypoints[0][matches[..., 1]], keypoints[1][matches[..., 2]], color="lime", lw=0.2)
+
     if output_path is None:
         viz.plt.show()
     else:
@@ -370,21 +382,27 @@ def trtexec(
     match extractor_type:
         case Extractor.superpoint:
             images = SuperPointPreprocessor.preprocess(images)
+            images = images.astype(np.float32)
+        case Extractor.superpoint_open:
+            print("Using SuperPointOpenPreprocessor")
+            images = SuperPointOpenPreprocessor.preprocess(images)
         case Extractor.disk:
             images = DISKPreprocessor.preprocess(images)
-    images = images.astype(np.float32)
-    print(f"Preprocessed images shape: {images.shape}")
-    print(f"Preprocessed images dtype: {images.dtype}")
-    print(f"Preprocessed images range: [{images.min()}, {images.max()}]")
+            images = images.astype(np.float32)
 
-    print("Python input tensor debug:")
-    for batch_idx in range(images.shape[0]):
-        print(f"Batch {batch_idx} first 10 values:")
-        flat_batch = images[batch_idx].flatten()
-        for i in range(min(10, len(flat_batch))):
-            print(f"  [{i}] = {flat_batch[i]:.6f}")
-        
-        print(f"Batch {batch_idx}: min={flat_batch.min():.6f}, max={flat_batch.max():.6f}")
+    if(debug):
+        print(f"Preprocessed images shape: {images.shape}")
+        print(f"Preprocessed images dtype: {images.dtype}")
+        print(f"Preprocessed images range: [{images.min()}, {images.max()}]")
+
+        print("Python input tensor debug:")
+        for batch_idx in range(images.shape[0]):
+            print(f"Batch {batch_idx} first 10 values:")
+            flat_batch = images[batch_idx].flatten()
+            for i in range(min(10, len(flat_batch))):
+                print(f"  [{i}] = {flat_batch[i]:.6f}")
+            
+            print(f"Batch {batch_idx}: min={flat_batch.min():.6f}, max={flat_batch.max():.6f}")
 
     # Build TensorRT engine
     if model_path.suffix == ".engine":
@@ -422,48 +440,39 @@ def trtexec(
         print(f"TensorRT engine built and saved to: {engine_path}")
 
     with TrtRunner(build_engine) as runner:
-        for _ in range(10 if profile else 1):  # Warm-up if profiling
+        for _ in range(20 if profile else 1):
             outputs = runner.infer(feed_dict={"images": images})
-            keypoints, matches, mscores = outputs["keypoints"], outputs["matches"], outputs["mscores"]  # noqa: F841
-
         if profile:
             typer.echo(f"Inference Time: {runner.last_inference_time():.3f} s")
+    
+    if extractor_type == Extractor.superpoint_open:
+        # Extractor-only model: outputs dict with keys "keypoints", "keypoint_scores", "descriptors"
+        typer.echo("Visualizing keypoints from SuperPointOpen extractor.")
+        kpts = outputs['keypoints']
+        scores = outputs['keypoint_scores']
+        descriptors = outputs['descriptors']
+        num_kpts = outputs['num_keypoints']
 
-    if debug:
-        print("\n=== PYTHON OUTPUT DEBUG ===")
-        print(f"Keypoints shape: {keypoints.shape}")
-        print(f"Matches shape: {matches.shape}")
-        print(f"MScores shape: {mscores.shape}")
+        print(f"Keypoints: {kpts.shape}")
+        print(f"Keypoint scores: {scores.shape}")
+        print(f"Descriptors: {descriptors.shape}")
+        print(f"Number of keypoints: {num_kpts.shape}")
+        viz.plot_sp_open(raw_images, images.shape[0], kpts, num_kpts)
 
-        print(f"Keypoints dtype: {keypoints.dtype}")
-        print(f"Keypoints range: [{keypoints.min():.6f}, {keypoints.max():.6f}]")
+        if debug:
+            print("\n=== PYTHON OUTPUT DEBUG (Extractor) ===")
+            print(f"Keypoints shape: {keypoints.shape}")
+    else:
+        # SPLG pipeline model: outputs dict with keys "keypoints", "matches", "mscores"
+        viz.plot_images(raw_images)
+        typer.echo("Visualizing matches from LightGlue pipeline.")
+        keypoints, matches, mscores = outputs["keypoints"], outputs["matches"], outputs["mscores"]
+        viz.plot_matches(keypoints[0][matches[..., 1]], keypoints[1][matches[..., 2]], color="lime", lw=0.2)
+        if debug:
+            print("\n=== PYTHON OUTPUT DEBUG (Pipeline) ===")
+            print(f"Keypoints shape: {keypoints.shape}")
+            print(f"Matches shape: {matches.shape}")
 
-        # Print first 20 keypoints for each batch (same as C++)
-        print("Python keypoints batch 0:")
-        for i in range(20):
-            if i < keypoints.shape[1]:  # Check bounds
-                x = keypoints[0, i, 0]
-                y = keypoints[0, i, 1]
-                print(f"  [{i}] x={x:.2f}, y={y:.2f}")
-
-        print("Python keypoints batch 1:")
-        for i in range(20):
-            if i < keypoints.shape[1]:  # Check bounds
-                x = keypoints[1, i, 0]
-                y = keypoints[1, i, 1]
-                print(f"  [{i}] x={x:.2f}, y={y:.2f}")
-
-        print(f"Total matches: {matches.shape[0]}")
-        print(f"Match scores range: [{mscores.min():.6f}, {mscores.max():.6f}]")
-
-    # Check if keypoints are all zeros
-    batch0_nonzero = np.count_nonzero(keypoints[0])
-    batch1_nonzero = np.count_nonzero(keypoints[1])
-    print(f"Batch 0 non-zero keypoint values: {batch0_nonzero}")
-    print(f"Batch 1 non-zero keypoint values: {batch1_nonzero}")
-
-    viz.plot_images(raw_images)
-    viz.plot_matches(keypoints[0][matches[..., 1]], keypoints[1][matches[..., 2]], color="lime", lw=0.2)
     if output_path is None:
         viz.plt.show()
     else:
