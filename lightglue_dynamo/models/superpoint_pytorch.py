@@ -66,7 +66,7 @@ class VGGBlock(nn.Sequential):
         )
 
 
-class SuperPoint(nn.Module):
+class SuperPointOpen(nn.Module):
     default_conf = {
         "nms_radius": 4,
         "max_num_keypoints": None,

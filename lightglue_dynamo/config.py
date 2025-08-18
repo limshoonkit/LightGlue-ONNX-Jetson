@@ -17,6 +17,7 @@ class InferenceDevice(str, Enum):
 class Extractor(str, Enum):
     # Explicitly assign the string value instead of using auto()
     superpoint = "superpoint"
+    superpoint_open = "superpoint_open"
     disk = "disk"
 
     def __str__(self) -> str:
@@ -28,6 +29,8 @@ class Extractor(str, Enum):
         match self:
             case Extractor.superpoint:
                 return 8
+            case Extractor.superpoint_open:
+                return 8
             case Extractor.disk:
                 return 16
 
@@ -35,6 +38,8 @@ class Extractor(str, Enum):
     def input_channels(self) -> int:
         match self:
             case Extractor.superpoint:
+                return 1
+            case Extractor.superpoint_open:
                 return 1
             case Extractor.disk:
                 return 3
@@ -44,6 +49,8 @@ class Extractor(str, Enum):
         match self:
             case Extractor.superpoint:
                 return {"url": "https://github.com/cvg/LightGlue/releases/download/v0.1_arxiv/superpoint_lightglue.pth"}
+            case Extractor.superpoint:
+                return {"url": "/home/nvidia/third_party/LightGlue-ONNX-Jetson/weights/superpoint_v6_from_tf.pth"}
             case Extractor.disk:
                 return {
                     "input_dim": 128,
