@@ -133,7 +133,7 @@ python dynamo.py export superpoint_open \
   -o weights/superpoint_open_b2_h400_w640_kp256.onnx
 ```
 
-3. Note: Does not work for INT8
+3a. Note: Does not work for INT8
 ```
 python cast_onnx.py # change path
 python dynamo.py trtexec \
@@ -147,6 +147,11 @@ python dynamo.py trtexec \
   --profile
 ```
 
+3b. Simplify onnx
+```
+onnxsim /home/nvidia/third_party/LightGlue-ONNX-Jetson/weights/superpoint_open_b2_h400_w640_kp256.onnx /home/nvidia/third_party/LightGlue-ONNX-Jetson/weights/superpoint_open_b2_h400_w640_kp256_sim.onnx
+```
+
 4. Export engine
 ```
 python dynamo.py trtexec \
@@ -158,6 +163,7 @@ python dynamo.py trtexec \
   --profile
 ```
 
+5. Dont use dla, cant work
 ```
 python dynamo.py trtexec \
   weights/superpoint_open_b2_h400_w640_kp256.onnx \
@@ -165,8 +171,12 @@ python dynamo.py trtexec \
   superpoint_open \
   -h 400 -w 640 \
   --fp16 \
-  --use-dla \
   --profile
+```
+
+```
+/usr/src/tensorrt/bin/trtexec --loadEngine=/home/nvidia/third_party/LightGlue-ONNX-Jetson/weights/superpoint_open_b2_h400_w640_kp256.engine --fp16 --separateProfileRun --dumpProfile
+/usr/src/tensorrt/bin/trtexec --loadEngine=/home/nvidia/third_party/LightGlue-ONNX-Jetson/weights/superpoint_open_b2_h400_w640_kp256_dla.engine --useDLACore=0 --allowGPUFallback --dumpProfile
 ```
 
 <details>

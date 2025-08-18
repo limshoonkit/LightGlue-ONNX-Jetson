@@ -119,18 +119,35 @@ def export(
         raise typer.BadParameter("num_keypoints cannot be greater than height * width.")
 
     dummy_input = torch.randn(batch_size or 2, extractor_type.input_channels, height or 256, width or 256)
-
     if extractor_type == Extractor.superpoint_open:
         typer.echo(f"Exporting {extractor_type} extractor...")
-
+        ckpt = torch.load("/home/nvidia/third_party/LightGlue-ONNX-Jetson/weights/superpoint_v6_from_tf.pth", map_location="cpu")
+        if "state_dict" in ckpt:
+            ckpt = ckpt["state_dict"]
+        
+        # Load weights into the extractor
+        extractor.load_state_dict(ckpt, strict=True)
+        
+        # Set to eval mode and disable gradients
+        extractor.eval()
+        for param in extractor.parameters():
+            param.requires_grad = False
+        
+        # Set deterministic behavior
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        
         class ExtractorWrapper(torch.nn.Module):
             def __init__(self, model):
                 super().__init__()
                 self.model = model
+                self.model.eval()
 
             def forward(self, image):
+                self.model.eval()
                 preds = self.model({"image": image})
-
                 return (
                     preds["keypoints"],
                     preds["keypoint_scores"],
@@ -138,7 +155,10 @@ def export(
                     preds["num_keypoints"],
                 )
 
-        model_to_export = ExtractorWrapper(extractor).eval()
+        model_to_export = ExtractorWrapper(extractor)
+        model_to_export.eval()
+        
+        dummy_input = torch.randn(batch_size or 2, 1, height or 400, width or 640, dtype=torch.float32)
         
         output_names = ["keypoints", "keypoint_scores", "descriptors", "num_keypoints"]
         
@@ -157,6 +177,22 @@ def export(
             dynamic_axes["descriptors"][0] = "batch_size"
             dynamic_axes["num_keypoints"][0] = "batch_size"
 
+        # Export with very specific settings
+        torch.onnx.export(
+            model_to_export,
+            dummy_input,
+            str(output),
+            input_names=["images"],
+            output_names=output_names,
+            opset_version=opset,
+            dynamic_axes=dynamic_axes,
+            do_constant_folding=True,
+            verbose=True,
+            export_params=True,
+            training=torch.onnx.TrainingMode.EVAL,
+            keep_initializers_as_inputs=False,
+            operator_export_type=torch.onnx.OperatorExportTypes.ONNX,
+        )
     else:
         typer.echo(f"Exporting {extractor_type} pipeline...")
 
@@ -186,15 +222,15 @@ def export(
             dynamic_axes["keypoints"][0] = "batch_size"
         dynamic_axes |= {"matches": {0: "num_matches"}, "mscores": {0: "num_matches"}}
 
-    torch.onnx.export(
-        model_to_export,
-        dummy_input,
-        str(output),
-        input_names=["images"],
-        output_names=output_names,
-        opset_version=opset,
-        dynamic_axes=dynamic_axes,
-    )
+        torch.onnx.export(
+            model_to_export,
+            dummy_input,
+            str(output),
+            input_names=["images"],
+            output_names=output_names,
+            opset_version=opset,
+            dynamic_axes=dynamic_axes,
+        )
 
     onnx.checker.check_model(output)
     onnx.save_model(SymbolicShapeInference.infer_shapes(onnx.load_model(output), auto_merge=True), output)  # type: ignore
