@@ -118,7 +118,7 @@ def export(
     if height > 0 and width > 0 and num_keypoints > height * width:
         raise typer.BadParameter("num_keypoints cannot be greater than height * width.")
 
-    dummy_input = torch.zeros(batch_size or 2, extractor_type.input_channels, height or 256, width or 256)
+    dummy_input = torch.randn(batch_size or 2, extractor_type.input_channels, height or 256, width or 256)
 
     if extractor_type == Extractor.superpoint_open:
         typer.echo(f"Exporting {extractor_type} extractor...")
