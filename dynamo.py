@@ -121,7 +121,7 @@ def export(
     dummy_input = torch.randn(batch_size or 2, extractor_type.input_channels, height or 256, width or 256)
     if extractor_type == Extractor.superpoint_open:
         typer.echo(f"Exporting {extractor_type} extractor...")
-        ckpt = torch.load("/home/nvidia/third_party/LightGlue-ONNX-Jetson/weights/superpoint_v6_from_tf.pth", map_location="cpu")
+        ckpt = torch.load("./weights/superpoint_v6_from_tf.pth", map_location="cpu")
         if "state_dict" in ckpt:
             ckpt = ckpt["state_dict"]
         

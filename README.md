@@ -58,6 +58,11 @@ Pass `--help` to see the available options for each command. The CLI will export
 ```
 poetry install
 source .venv/bin/activate
+source /home/ubuntu/.cache/pypoetry/virtualenvs/lightglue-onnx--g632ONZ-py3.10/bin/activate
+```
+
+```
+pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
 ```
 
 ```
@@ -129,8 +134,8 @@ python dynamo.py export superpoint \
 ```
 python dynamo.py export superpoint_open \
   --num-keypoints 256 \
-  -b 2 -h 400 -w 640 \
-  -o weights/superpoint_open_b2_h400_w640_kp256.onnx
+  -b 2 -h 360 -w 640 \
+  -o weights/superpoint_open_b2_h360_w640_kp256.onnx
 ```
 
 3a. Note: Does not work for INT8
@@ -152,6 +157,10 @@ python dynamo.py trtexec \
 onnxsim /home/nvidia/third_party/LightGlue-ONNX-Jetson/weights/superpoint_open_b2_h400_w640_kp256.onnx /home/nvidia/third_party/LightGlue-ONNX-Jetson/weights/superpoint_open_b2_h400_w640_kp256_sim.onnx
 ```
 
+```
+onnxsim /home/ubuntu/Desktop/uosm-cirg/LightGlue-ONNX-Jetson/weights/superpoint_open_b2_h360_w640_kp256.onnx /home/ubuntu/Desktop/uosm-cirg/LightGlue-ONNX-Jetson/weights/superpoint_open_b2_h360_w640_kp256_simplify.onnx
+```
+
 4. Export engine
 ```
 python dynamo.py trtexec \
@@ -159,6 +168,16 @@ python dynamo.py trtexec \
   assets/debug1.png assets/debug2.png \
   superpoint \
   -h 400 -w 640 \
+  --fp16 \
+  --profile
+```
+
+```
+python dynamo.py trtexec \
+  weights/superpoint_open_b2_h360_w640_kp256_simplify.onnx \
+  assets/debug1.png assets/debug2.png \
+  superpoint_open \
+  -h 360 -w 640 \
   --fp16 \
   --profile
 ```
