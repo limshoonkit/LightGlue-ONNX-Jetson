@@ -145,6 +145,12 @@ def export(
     check_multiple_of(height, extractor_type.input_dim_divisor)
     check_multiple_of(width, extractor_type.input_dim_divisor)
 
+    # Set deterministic behavior
+    torch.manual_seed(42) # or 69
+    torch.cuda.manual_seed_all(42) # or 69
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
     if height > 0 and width > 0 and num_keypoints > height * width:
         raise typer.BadParameter("num_keypoints cannot be greater than height * width.")
 
@@ -164,12 +170,6 @@ def export(
         extractor.eval()
         for param in extractor.parameters():
             param.requires_grad = False
-        
-        # Set deterministic behavior
-        torch.manual_seed(42)
-        torch.cuda.manual_seed_all(42)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
         
         class ExtractorWrapper(torch.nn.Module):
             def __init__(self, model):
@@ -209,7 +209,7 @@ def export(
             dynamic_axes["descriptors"][0] = "batch_size"
             dynamic_axes["num_keypoints"][0] = "batch_size"
 
-        # Export with very specific settings
+        # Export with specific settings
         torch.onnx.export(
             model_to_export,
             dummy_input,
@@ -230,105 +230,161 @@ def export(
     # https://github.com/fabio-sim/LightGlue-ONNX/issues/69#issuecomment-2972612844
     elif extractor_type in [Extractor.aliked_n16, Extractor.aliked_n16rot, Extractor.aliked_n32, Extractor.aliked_t16]:
         typer.echo(f"Exporting {extractor_type} extractor...")
-        
+
         from torch.onnx import register_custom_op_symbolic
         from torch.onnx.symbolic_helper import _get_const
+        opset_version_for_aliked = 19
 
+        # https://github.com/onnx/onnx/blob/main/docs/Operators.md#DeformConv
         def deform_conv2d_symbolic(g, input, weight, offset, mask, bias,
-                                   stride_h, stride_w, pad_h, pad_w,
-                                   dil_h, dil_w, n_weight_grps,
-                                   n_offset_grps, use_mask):
-            
+                        stride_h, stride_w, pad_h, pad_w,
+                        dil_h, dil_w, n_weight_grps,
+                        n_offset_grps, use_mask):
+
             stride = [_get_const(stride_h, 'i', 'stride_h'), _get_const(stride_w, 'i', 'stride_w')]
             padding = [_get_const(pad_h, 'i', 'pad_h'), _get_const(pad_w, 'i', 'pad_w')]
-            dilation = [_get_const(dil_h, 'i', 'dil_h'), _get_const(dil_w, 'i', 'dil_w')]
+            dilations = [_get_const(dil_h, 'i', 'dil_h'), _get_const(dil_w, 'i', 'dil_w')]
             groups = _get_const(n_weight_grps, 'i', 'n_weight_grps')
             offset_groups = _get_const(n_offset_grps, 'i', 'n_offset_grps')
-            
+
+            # [y_start, x_start, y_end, x_end]
+            pads = [padding[0], padding[1], padding[0], padding[1]] 
+
             if mask.node().mustBeNone():
-                mask = g.op("Constant", value_t=torch.tensor([], dtype=torch.float32))
+                mask = g.op("Constant")
             if bias.node().mustBeNone():
-                bias = g.op("Constant", value_t=torch.tensor([], dtype=torch.float32))
+                bias = g.op("Constant")
 
             return g.op("DeformConv", input, weight, offset, mask, bias,
-                        stride_i=stride,
-                        padding_i=padding,
-                        dilation_i=dilation,
+                        strides_i=stride,
+                        pads_i=pads,
+                        dilations_i=dilations,
                         group_i=groups,
                         offset_group_i=offset_groups)
 
         # Register symbolic function for the 'torchvision::deform_conv2d' op
-        # Hardcode opset 19, where DeformConv is a standard operator.
-        opset_version_for_aliked = 19
         register_custom_op_symbolic("torchvision::deform_conv2d", deform_conv2d_symbolic, opset_version_for_aliked)
 
-        class ALIKEDWrapper(torch.nn.Module):
-            def __init__(self, model):
+        class AlikedWrapper(torch.nn.Module):
+            """Wraps the ALIKED model to output fixed-size tensors"""
+            def __init__(self, model, max_kps=256):
                 super().__init__()
                 self.model = model
                 self.model.eval()
+                self.max_kps = max_kps
 
             def forward(self, image):
-                preds = self.model(image)
-                keypoints = preds["keypoints"][0]  # Shape: [N, 2]
-                scores = preds["scores"][0]          # Shape: [N]
-                descriptors = preds["descriptors"][0] # Shape: [N, D]
-                keypoints = keypoints.unsqueeze(0)
-                scores = scores.unsqueeze(0)
-                descriptors = descriptors.unsqueeze(0)
+                # image shape: [B, 3, H, W]
+                preds = self.model.forward(image)
+                
+                kpts_list, scores_list, desc_list = [], [], []
+                batch_size = image.shape[0]
+                
+                # Loop through each item in the batch to handle padding
+                for i in range(batch_size):
+                    kpts = preds['keypoints'][i]    # Shape: [N, 2]
+                    scores = preds['scores'][i]      # Shape: [N]
+                    descriptors = preds['descriptors'][i] # Shape: [N, D]
+                    
+                    num_detected = kpts.shape[0]
+                    
+                    if num_detected > self.max_kps:
+                        print(f"Warning: DKD produced {num_detected} keypoints, limiting to {self.max_kps}")
+                        # Sort by scores and take top max_kps keypoints
+                        top_indices = torch.topk(scores, self.max_kps, sorted=False)[1]
+                        kpts = kpts[top_indices]
+                        scores = scores[top_indices]
+                        descriptors = descriptors[top_indices]
+                        num_detected = self.max_kps
+                    
+                    # Create padded tensors with a fixed size (max_kps)
+                    kpts_padded = torch.zeros(self.max_kps, 2, device=kpts.device, dtype=kpts.dtype)
+                    scores_padded = torch.zeros(self.max_kps, device=scores.device, dtype=scores.dtype)
+                    desc_padded = torch.zeros(self.max_kps, descriptors.shape[1], device=descriptors.device, dtype=descriptors.dtype)
+                    
+                    # Copy the valid data into the padded tensors
+                    if num_detected > 0:
+                        kpts_padded[:num_detected] = kpts
+                        scores_padded[:num_detected] = scores
+                        desc_padded[:num_detected] = descriptors
+                    
+                    kpts_list.append(kpts_padded)
+                    scores_list.append(scores_padded)
+                    desc_list.append(desc_padded)
 
-                # ALIKED outputs keypoints in normalized [-1, 1] range. Convert to pixel coordinates.
-                _, _, h, w = image.shape
-                wh = torch.tensor([w - 1, h - 1], device=keypoints.device, dtype=keypoints.dtype)
-                keypoints = wh * (keypoints + 1) / 2
+                # Stack the list of tensors into a single batch tensor
+                final_kpts = torch.stack(kpts_list, dim=0)
+                final_scores = torch.stack(scores_list, dim=0)
+                final_descriptors = torch.stack(desc_list, dim=0)
                 
-                # Calculate the number of keypoints for each image in the batch
-                num_keypoints = torch.tensor([keypoints.shape[1]] * keypoints.shape[0], device=keypoints.device)
-                
-                return (
-                    keypoints,      # B x N x 2
-                    scores,         # B x N
-                    descriptors,    # B x N x D
-                    num_keypoints   # B
+                # Count actual valid keypoints per batch item
+                num_valid_keypoints = torch.tensor(
+                    [min(preds['keypoints'][i].shape[0], self.max_kps) for i in range(batch_size)], 
+                    device=image.device,
+                    dtype=torch.int32
                 )
-        
-        # Instantiate and wrap the model
-        model_to_export = ALIKEDWrapper(extractor).eval()
-        
-        # Prepare for export
-        dummy_input = torch.randn(batch_size or 1, 3, height or 480, width or 640, dtype=torch.float32)
-        
+
+                # Return tensors with fixed dimension
+                return final_kpts, final_scores, final_descriptors, num_valid_keypoints
+
+        def configure_aliked_for_export(extractor, max_kps):
+            """Configure the ALIKED extractor to limit keypoint detection."""
+            # Configure the DKD module parameters
+            if hasattr(extractor, 'dkd'):
+                print(f"Original DKD config: top_k={extractor.dkd.top_k}, n_limit={extractor.dkd.n_limit}, scores_th={extractor.dkd.scores_th}")
+                
+                # Set n_limit to max_kps to hard limit the number of keypoints
+                extractor.dkd.n_limit = max_kps
+                
+                # Use top_k mode instead of threshold mode for consistent output
+                if extractor.dkd.top_k <= 0:  # Currently in threshold mode
+                    extractor.dkd.top_k = max_kps
+                else:
+                    extractor.dkd.top_k = min(extractor.dkd.top_k, max_kps)
+                
+                # Optionally increase score threshold to get fewer detections
+                extractor.dkd.scores_th = max(extractor.dkd.scores_th, 0.25)
+                
+                print(f"Updated DKD config: top_k={extractor.dkd.top_k}, n_limit={extractor.dkd.n_limit}, scores_th={extractor.dkd.scores_th}")
+            
+            return extractor
+
+        # Configure the extractor before wrapping
+        extractor = configure_aliked_for_export(extractor, num_keypoints)
+        model_to_export = AlikedWrapper(extractor, max_kps=num_keypoints)
+        model_to_export.eval()
+
         output_names = ["keypoints", "keypoint_scores", "descriptors", "num_keypoints"]
-        
+
+        dummy_input = torch.randn(batch_size or 2, 3, height or 400, width or 640, dtype=torch.float32)
+
         dynamic_axes = {
             "images": {},
-            "keypoints": {"num_keypoints": 1},
-            "keypoint_scores": {"num_keypoints": 1},
-            "descriptors": {"num_keypoints": 1},
+            "keypoints": {},
+            "keypoint_scores": {},
+            "descriptors": {},
+            "num_keypoints": {},
         }
-        
+
         if batch_size == 0:
             dynamic_axes["images"][0] = "batch_size"
             dynamic_axes["keypoints"][0] = "batch_size"
             dynamic_axes["keypoint_scores"][0] = "batch_size"
             dynamic_axes["descriptors"][0] = "batch_size"
-            dynamic_axes["num_keypoints"] = {0: "batch_size"}
-
-        if height == 0:
-            dynamic_axes["images"][2] = "height"
-        if width == 0:
-            dynamic_axes["images"][3] = "width"
+            dynamic_axes["num_keypoints"][0] = "batch_size"
 
         torch.onnx.export(
             model_to_export,
-            (dummy_input,),
+            dummy_input,
             str(output),
             input_names=["images"],
             output_names=output_names,
-            opset_version=opset_version_for_aliked,
+            opset_version=max(opset, opset_version_for_aliked), # Use opset 19+ for DeformConv
             dynamic_axes=dynamic_axes,
             do_constant_folding=True,
-            verbose=False,
+            verbose=True,
+            export_params=True,
+            training=torch.onnx.TrainingMode.EVAL,
         )
     
     # Handle full pipeline export (SuperPoint + DISK with LightGlue)
@@ -371,8 +427,10 @@ def export(
             dynamic_axes=dynamic_axes,
         )
 
-    onnx.checker.check_model(output)
-    onnx.save_model(SymbolicShapeInference.infer_shapes(onnx.load_model(output), auto_merge=True), output)  # type: ignore
+    model = onnx.load(output)
+    model = onnx.shape_inference.infer_shapes(model)
+    model = SymbolicShapeInference.infer_shapes(model, auto_merge=True)
+    onnx.save(model, str(output))
     typer.echo(f"Successfully exported model to {output}")
 
     if fp16:
@@ -477,7 +535,7 @@ def infer(
         print(f"Keypoint scores: {scores.shape}")
         print(f"Descriptors: {descriptors.shape}")
         print(f"Number of keypoints: {num_kpts.shape}")
-        viz.plot_extractor_only(raw_images, images.shape[0], kpts, num_kpts)
+        viz.plot_extractor_only(raw_images, images.shape[0], kpts, num_kpts, extractor_name="SuperPoint-Open")
     elif extractor_type in [Extractor.aliked_n16, Extractor.aliked_n16rot, Extractor.aliked_n32, Extractor.aliked_t16]:
         typer.echo("Visualizing keypoints from ALIKED extractor.")
         kpts, scores, descriptors, num_kpts = outputs
@@ -485,7 +543,7 @@ def infer(
         print(f"Keypoint scores: {scores.shape}")
         print(f"Descriptors: {descriptors.shape}")
         print(f"Number of keypoints: {num_kpts.shape}")
-        viz.plot_extractor_only(raw_images, images.shape[0], kpts, num_kpts)  # Reuse same visualization
+        viz.plot_extractor_only(raw_images, images.shape[0], kpts, num_kpts, extractor_name="ALIKED")
     else:
         # Full pipeline model: outputs are [keypoints, matches, mscores]
         viz.plot_images(raw_images)
@@ -647,11 +705,11 @@ def trtexec(
         print(f"Keypoint scores: {scores.shape}")
         print(f"Descriptors: {descriptors.shape}")
         print(f"Number of keypoints: {num_kpts.shape}")
-        viz.plot_extractor_only(raw_images, images.shape[0], kpts, num_kpts)
+        viz.plot_extractor_only(raw_images, images.shape[0], kpts, num_kpts, extractor_name="SuperPoint-Open")
 
         if debug:
             print("\n=== PYTHON OUTPUT DEBUG (Extractor) ===")
-            print(f"Keypoints shape: {keypoints.shape}")
+            print(f"Keypoints: {kpts}")
     elif extractor_type in [Extractor.aliked_n16, Extractor.aliked_n16rot, Extractor.aliked_n32, Extractor.aliked_t16]:
         # ALIKED Extractor-only model: outputs dict with keys "keypoints", "keypoint_scores", "descriptors"
         typer.echo(f"Visualizing keypoints from {extractor_type} extractor.")
@@ -664,13 +722,10 @@ def trtexec(
         print(f"Keypoint scores: {scores.shape}")
         print(f"Descriptors: {descriptors.shape}")
         print(f"Number of keypoints: {num_kpts.shape}")
-        viz.plot_extractor_only(raw_images, images.shape[0], kpts, num_kpts)
-
+        viz.plot_extractor_only(raw_images, images.shape[0], kpts, num_kpts, extractor_name="ALIKED")
         if debug:
-            print("\n=== PYTHON OUTPUT DEBUG (ALIKED Extractor) ===")
-            print(f"Keypoints shape: {kpts.shape}")
-            print(f"Keypoint scores shape: {scores.shape}")
-            print(f"Descriptors shape: {descriptors.shape}")
+            print("\n=== PYTHON OUTPUT DEBUG (Extractor) ===")
+            print(f"Keypoints: {kpts}")
     else:
         # SPLG pipeline model: outputs dict with keys "keypoints", "matches", "mscores"
         viz.plot_images(raw_images)

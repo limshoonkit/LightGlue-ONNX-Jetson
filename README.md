@@ -162,11 +162,15 @@ python dynamo.py trtexec \
 
 3b. Simplify onnx
 ```
-onnxsim /home/nvidia/third_party/LightGlue-ONNX-Jetson/weights/superpoint_open_b2_h400_w640_kp256.onnx /home/nvidia/third_party/LightGlue-ONNX-Jetson/weights/superpoint_open_b2_h400_w640_kp256_sim.onnx
+onnxsim ./weights/superpoint_open_b2_h400_w640_kp256.onnx ./weights/superpoint_open_b2_h400_w640_kp256_sim.onnx
 ```
 
 ```
-onnxsim /home/ubuntu/Desktop/uosm-cirg/LightGlue-ONNX-Jetson/weights/superpoint_open_b2_h360_w640_kp256.onnx /home/ubuntu/Desktop/uosm-cirg/LightGlue-ONNX-Jetson/weights/superpoint_open_b2_h360_w640_kp256_simplify.onnx
+onnxsim ./weights/superpoint_open_b2_h360_w640_kp256.onnx ./weights/superpoint_open_b2_h360_w640_kp256_simplify.onnx
+```
+
+```
+onnxsim ./weights/aliked_n16_b2_h384_w640_kp256.onnx ./weights/aliked_n16_b2_h384_w640_kp256_simplify.onnx
 ```
 
 4. Export engine
@@ -190,6 +194,16 @@ python dynamo.py trtexec \
   --profile
 ```
 
+```
+python dynamo.py trtexec \
+  weights/aliked_n16_b2_h384_w640_kp256_simplify.onnx \
+  assets/DSC_0410.JPG assets/DSC_0411.JPG \
+  aliked_n16 \
+  -h 384 -w 640 \
+  --fp16 \
+  --profile
+```
+
 5. Dont use dla, cant work
 ```
 python dynamo.py trtexec \
@@ -202,8 +216,8 @@ python dynamo.py trtexec \
 ```
 
 ```
-/usr/src/tensorrt/bin/trtexec --loadEngine=/home/nvidia/third_party/LightGlue-ONNX-Jetson/weights/superpoint_open_b2_h400_w640_kp256.engine --fp16 --separateProfileRun --dumpProfile
-/usr/src/tensorrt/bin/trtexec --loadEngine=/home/nvidia/third_party/LightGlue-ONNX-Jetson/weights/superpoint_open_b2_h400_w640_kp256_dla.engine --useDLACore=0 --allowGPUFallback --dumpProfile
+/usr/src/tensorrt/bin/trtexec --loadEngine=./weights/superpoint_open_b2_h400_w640_kp256.engine --fp16 --separateProfileRun --dumpProfile
+/usr/src/tensorrt/bin/trtexec --loadEngine=./weights/superpoint_open_b2_h400_w640_kp256_dla.engine --useDLACore=0 --allowGPUFallback --dumpProfile
 ```
 
 <details>

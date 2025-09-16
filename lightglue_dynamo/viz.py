@@ -42,32 +42,48 @@ def plot_images(imgs, titles=None, cmaps="gray", dpi=100, pad=0.5, adaptive=True
             ax[i].set_title(titles[i])
     fig.tight_layout(pad=pad)
 
-def plot_extractor_only(images, batch_size, kpts, num_kpts):
+def plot_extractor_only(images, batch_size, kpts, num_kpts, extractor_name="Extractor"):
     import cv2
+    import matplotlib.pyplot as plt
+    import numpy as np
+
     output_images = []
+
+    h, w = images[0].shape[:2]
+
     for i in range(batch_size):
-        # Get the valid keypoints for this image using num_keypoints
-        num = num_kpts[i]
+        # Get the valid keypoints for this image
+        num = int(num_kpts[i]) if hasattr(num_kpts, "__iter__") else int(num_kpts)
         kpts_i = kpts[i, :num, :]
-        
+
+        if kpts_i.size == 0:
+            kpts_pixel = np.empty((0, 2))
+        else:
+            # If most points fall inside [-1, 1], perform denormalization to get pixel coords
+            if np.all((kpts_i >= -1.1) & (kpts_i <= 1.1)):
+                wh = np.array([w - 1, h - 1], dtype=np.float32)
+                kpts_pixel = (kpts_i + 1) / 2 * wh
+            else:
+                kpts_pixel = kpts_i  # already in pixel coords
+
         # Convert keypoints to OpenCV's format
-        # cv2.KeyPoint(x, y, size)
-        cv_kpts = [cv2.KeyPoint(p[0], p[1], 5) for p in kpts_i]
-        
+        cv_kpts = [cv2.KeyPoint(float(p[0]), float(p[1]), 5) for p in kpts_pixel]
+
         # Draw keypoints on the image
-        img_with_kpts = cv2.drawKeypoints(images[i], cv_kpts, None, color=(0, 255, 0))
+        color = (0, 255, 0) if "superpoint" in extractor_name.lower() else (255, 0, 0)
+        img_with_kpts = cv2.drawKeypoints(images[i], cv_kpts, None, color=color)
         output_images.append(img_with_kpts)
 
     # Combine images side-by-side
     combined_image = np.hstack(output_images)
 
-    # Display using matplotlib (more portable than cv2.imshow)
+    # Display
     plt.figure(figsize=(16, 8))
-    # OpenCV loads as BGR, matplotlib displays as RGB
     plt.imshow(cv2.cvtColor(combined_image, cv2.COLOR_BGR2RGB))
-    plt.title('SuperPoint Keypoints')
-    plt.axis('off')
+    plt.title(f"{extractor_name} Keypoints")
+    plt.axis("off")
     plt.show()
+
 
 def plot_keypoints(kpts, colors="lime", ps=4, axes=None, a=1.0):
     """Plot keypoints for existing images.
