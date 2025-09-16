@@ -130,12 +130,20 @@ python dynamo.py export superpoint \
   -o weights/superpoint_lightglue_b2_h400_w640_kp256.onnx
 ```
 
-2. SP only (MIT License)
+2a. SP only (MIT License)
 ```
 python dynamo.py export superpoint_open \
   --num-keypoints 256 \
   -b 2 -h 360 -w 640 \
   -o weights/superpoint_open_b2_h360_w640_kp256.onnx
+```
+
+2b. ALIKED (from https://github.com/ajuric/aliked-tensorrt/tree/main)
+```
+python dynamo.py export aliked_n16 \
+  --num-keypoints 256 \
+  -b 2 -h 384 -w 640 \
+  -o weights/aliked_n16_b2_h384_w640_kp256.onnx
 ```
 
 3a. Note: Does not work for INT8

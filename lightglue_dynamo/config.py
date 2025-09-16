@@ -58,19 +58,6 @@ class Extractor(str, Enum):
         match self:
             case Extractor.superpoint:
                 return {"url": "https://github.com/cvg/LightGlue/releases/download/v0.1_arxiv/superpoint_lightglue.pth"}
-            case Extractor.superpoint_open:
-                return {"url": "./weights/superpoint_v6_from_tf.pth"}
-            case Extractor.aliked_n16:
-                return {"url": "./weights/aliked-n16.pth"}
-            case Extractor.aliked_n16rot:
-                return {"url": "./weights/aliked-n16rot.pth"}
-            case Extractor.aliked_n32:
-                return {"url": "./weights/aliked-n32.pth"}
-            case Extractor.aliked_t16:
-                return {
-                        "input_dim": 64,
-                        "url": "./weights/aliked-t16.pth"
-                    }
             case Extractor.disk:
                 return {
                     "input_dim": 128,

@@ -3,9 +3,9 @@ import torch
 from torch import nn
 from torchvision.models import resnet
 
-from nets.soft_detect import DKD
-from nets.padder import InputPadder
-from nets.blocks import *
+from .soft_detect import DKD
+from .padder import InputPadder
+from .blocks import *
 import time
 from torchvision.transforms import ToTensor
 
@@ -50,7 +50,7 @@ class ALIKED(nn.Module):
             top_k: int = -1, # -1 for threshold based mode, >0 for top K mode.
             scores_th: float = 0.2,
             n_limit: int = 5000, # Maximum number of keypoints to be detected
-            load_pretrained: bool = True,
+            pretrained_path: Optional[str] = None,
             ):
         super().__init__()
         
@@ -95,9 +95,7 @@ class ALIKED(nn.Module):
         self.dkd = DKD(radius=2, top_k=top_k, scores_th=scores_th, n_limit=n_limit)
         
         # load pretrained
-        if load_pretrained:
-            pretrained_path = osp.join(osp.split(__file__)[0], f'../models/{model_name}.pth')
-            pretrained_path = osp.abspath(pretrained_path)
+        if pretrained_path: # Check if a path was provided
             if osp.exists(pretrained_path):
                 print(f'loading {pretrained_path}')
                 state_dict = torch.load(pretrained_path, 'cpu')

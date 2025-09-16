@@ -42,7 +42,7 @@ def plot_images(imgs, titles=None, cmaps="gray", dpi=100, pad=0.5, adaptive=True
             ax[i].set_title(titles[i])
     fig.tight_layout(pad=pad)
 
-def plot_sp_open(images, batch_size, kpts, num_kpts):
+def plot_extractor_only(images, batch_size, kpts, num_kpts):
     import cv2
     output_images = []
     for i in range(batch_size):
