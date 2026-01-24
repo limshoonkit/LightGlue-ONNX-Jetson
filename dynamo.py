@@ -567,9 +567,10 @@ def trtexec(
         Path, typer.Argument(exists=True, dir_okay=False, readable=True, help="Path to first image.")
     ],
     right_image_path: Annotated[
-        Path, typer.Argument(exists=True, dir_okay=False, readable=True, help="Path to second image.")
-    ],
-    extractor_type: Annotated[Extractor, typer.Argument()] = Extractor.superpoint,
+        Optional[Path],  # noqa: UP007
+        typer.Argument(exists=True, dir_okay=False, readable=True, help="Path to second image (optional for batch size 1)."),
+    ] = None,
+    extractor_type: Annotated[Extractor, typer.Option("-e", "--extractor", help="Extractor type.")] = Extractor.superpoint,
     output_path: Annotated[
         Optional[Path],  # noqa: UP007
         typer.Option(
@@ -612,11 +613,16 @@ def trtexec(
         SaveEngine,
         TrtRunner,
     )
+    from polygraphy.logger import G_LOGGER
+    G_LOGGER.severity = G_LOGGER.VERBOSE
 
-    from lightglue_dynamo import viz
+    # Handle single image (batch size 1) or image pair (batch size 2)
+    if right_image_path is not None:
+        image_paths = [left_image_path, right_image_path]
+    else:
+        image_paths = [left_image_path]
 
-    raw_images = [left_image_path, right_image_path]
-    raw_images = [cv2.resize(cv2.imread(str(i)), (width, height)) for i in raw_images]
+    raw_images = [cv2.resize(cv2.imread(str(i)), (width, height)) for i in image_paths]
     images = np.stack(raw_images)
 
     print(f"Raw images shape: {images.shape}")
@@ -693,6 +699,7 @@ def trtexec(
         if profile:
             typer.echo(f"Inference Time: {runner.last_inference_time():.3f} s")
     
+    from lightglue_dynamo import viz
     if extractor_type == Extractor.superpoint_open:
         # Extractor-only model: outputs dict with keys "keypoints", "keypoint_scores", "descriptors"
         typer.echo("Visualizing keypoints from SuperPointOpen extractor.")
@@ -728,6 +735,8 @@ def trtexec(
             print(f"Keypoints: {kpts}")
     else:
         # SPLG pipeline model: outputs dict with keys "keypoints", "matches", "mscores"
+        if right_image_path is None:
+            raise typer.BadParameter("Pipeline models (superpoint, disk) require two images for matching. Please provide a second image.")
         viz.plot_images(raw_images)
         typer.echo("Visualizing matches from LightGlue pipeline.")
         keypoints, matches, mscores = outputs["keypoints"], outputs["matches"], outputs["mscores"]

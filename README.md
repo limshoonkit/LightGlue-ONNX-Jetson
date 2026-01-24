@@ -58,11 +58,11 @@ Pass `--help` to see the available options for each command. The CLI will export
 ```
 poetry install
 source .venv/bin/activate
-source /home/ubuntu/.cache/pypoetry/virtualenvs/lightglue-onnx--g632ONZ-py3.10/bin/activate
+source /home/ubuntu/.cache/pypoetry/virtualenvs/lightglue-onnx-sgmjQlQ8-py3.10/bin/activate
 ```
 
 ```
-pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
+pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu126
 ```
 
 ```
@@ -141,9 +141,9 @@ python dynamo.py export superpoint_open \
 2b. ALIKED (from https://github.com/ajuric/aliked-tensorrt/tree/main)
 ```
 python dynamo.py export aliked_n16 \
-  --num-keypoints 256 \
+  --num-keypoints 512 \
   -b 2 -h 384 -w 640 \
-  -o weights/aliked_n16_b2_h384_w640_kp256.onnx
+  -o weights/aliked_n16_b2_h384_w640_kp512.onnx
 ```
 
 3a. Note: Does not work for INT8
@@ -162,10 +162,6 @@ python dynamo.py trtexec \
 
 3b. Simplify onnx
 ```
-onnxsim ./weights/superpoint_open_b2_h400_w640_kp256.onnx ./weights/superpoint_open_b2_h400_w640_kp256_sim.onnx
-```
-
-```
 onnxsim ./weights/superpoint_open_b2_h360_w640_kp256.onnx ./weights/superpoint_open_b2_h360_w640_kp256_simplify.onnx
 ```
 
@@ -178,7 +174,7 @@ onnxsim ./weights/aliked_n16_b2_h384_w640_kp256.onnx ./weights/aliked_n16_b2_h38
 python dynamo.py trtexec \
   weights/superpoint_lightglue_b2_h400_w640_kp128.onnx \
   assets/debug1.png assets/debug2.png \
-  superpoint \
+  -e superpoint \
   -h 400 -w 640 \
   --fp16 \
   --profile
@@ -188,17 +184,28 @@ python dynamo.py trtexec \
 python dynamo.py trtexec \
   weights/superpoint_open_b2_h360_w640_kp256_simplify.onnx \
   assets/debug1.png assets/debug2.png \
-  superpoint_open \
-  -h 360 -w 640 \
+  -e superpoint_open \
+  --height 360 \
+  --width 640 \
   --fp16 \
   --profile
+
+python dynamo.py trtexec \
+  weights/superpoint_open_h360_w640_kp256_simplify.onnx \
+  assets/debug1.png \
+  -e superpoint_open \
+  --height 360 \
+  --width 640 \
+  --fp16 \
+  --profile
+
 ```
 
 ```
 python dynamo.py trtexec \
-  weights/aliked_n16_b2_h384_w640_kp256_simplify.onnx \
+  weights/aliked_n16_b2_h384_w640_kp512_simplify.onnx \
   assets/DSC_0410.JPG assets/DSC_0411.JPG \
-  aliked_n16 \
+  -e aliked_n16 \
   -h 384 -w 640 \
   --fp16 \
   --profile
