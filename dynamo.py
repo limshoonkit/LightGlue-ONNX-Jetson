@@ -442,6 +442,180 @@ def export(
         typer.echo(f"Successfully converted model to {fp16_output}")
 
 
+@app.command("export-lightglue")
+def export_lightglue(
+    extractor_type: Annotated[
+        Extractor,
+        typer.Argument(help="Extractor whose LightGlue weights + input_dim to use (superpoint, aliked, disk)."),
+    ] = Extractor.superpoint,
+    output: Annotated[
+        Optional[Path],
+        typer.Option("-o", "--output", dir_okay=False, writable=True, help="Path to save exported model."),
+    ] = None,
+    batch_size: Annotated[
+        int,
+        typer.Option("-b", "--batch-size", min=0, help="Number of image pairs B (model sees 2B). 0 = dynamic."),
+    ] = 0,
+    num_keypoints: Annotated[
+        int,
+        typer.Option("-k", "--num-keypoints", min=0, help="Keypoints per image N. 0 = dynamic."),
+    ] = 0,
+    opset: Annotated[int, typer.Option(min=16, max=20)] = 17,
+    fp16: Annotated[bool, typer.Option("--fp16", help="Also emit an FP16 copy (do NOT use for TensorRT).")] = False,
+):
+    """Export standalone LightGlue matcher to ONNX.
+
+    Inputs:  keypoints (2B, N, 2) normalized to [-1, 1],  descriptors (2B, N, D)
+    Outputs: matches (M, 3),  mscores (M,)
+    """
+    import onnx
+    import torch
+    from onnxruntime.tools.symbolic_shape_infer import SymbolicShapeInference
+    from onnxruntime.transformers.float16 import convert_float_to_float16
+
+    from lightglue_dynamo.models import LightGlue
+
+    lg_cfg = extractor_type.lightglue_config
+    if lg_cfg is None:
+        raise typer.BadParameter(
+            f"No standalone LightGlue weights for {extractor_type}. Use superpoint, aliked, or disk."
+        )
+    input_dim = lg_cfg.get("input_dim", 256)
+
+    if output is None:
+        output = Path(f"weights/{extractor_type}_lightglue.onnx")
+
+    matcher = LightGlue(**lg_cfg).eval()
+
+    dummy_b = (batch_size or 1) * 2
+    dummy_n = num_keypoints or 512
+    dummy_kpts = torch.rand(dummy_b, dummy_n, 2) * 2 - 1
+    dummy_desc = torch.randn(dummy_b, dummy_n, input_dim)
+
+    dynamic_axes: dict[str, dict[int, str]] = {
+        "keypoints": {},
+        "descriptors": {},
+        "matches": {0: "num_matches"},
+        "mscores": {0: "num_matches"},
+    }
+    if batch_size == 0:
+        dynamic_axes["keypoints"][0] = "two_batch_size"
+        dynamic_axes["descriptors"][0] = "two_batch_size"
+    if num_keypoints == 0:
+        dynamic_axes["keypoints"][1] = "num_keypoints"
+        dynamic_axes["descriptors"][1] = "num_keypoints"
+
+    typer.echo(f"Exporting standalone LightGlue for {extractor_type} (input_dim={input_dim}) -> {output}")
+    torch.onnx.export(
+        matcher,
+        (dummy_kpts, dummy_desc),
+        str(output),
+        input_names=["keypoints", "descriptors"],
+        output_names=["matches", "mscores"],
+        opset_version=opset,
+        dynamic_axes=dynamic_axes,
+        do_constant_folding=True,
+    )
+
+    model = onnx.load(output)
+    model = onnx.shape_inference.infer_shapes(model)
+    model = SymbolicShapeInference.infer_shapes(model, auto_merge=True)
+    onnx.save(model, str(output))
+    typer.echo(f"Successfully exported model to {output}")
+
+    if fp16:
+        fp16_output = output.with_suffix(".fp16.onnx")
+        onnx.save_model(convert_float_to_float16(onnx.load_model(output)), fp16_output)
+        typer.echo(f"Successfully converted model to {fp16_output}")
+
+
+@app.command("export-lightglue")
+def export_lightglue(
+    extractor_type: Annotated[
+        Extractor,
+        typer.Argument(help="Extractor whose LightGlue weights + input_dim to use (superpoint, aliked, disk)."),
+    ] = Extractor.superpoint,
+    output: Annotated[
+        Optional[Path],
+        typer.Option("-o", "--output", dir_okay=False, writable=True, help="Path to save exported model."),
+    ] = None,
+    batch_size: Annotated[
+        int,
+        typer.Option("-b", "--batch-size", min=0, help="Number of image pairs B (model sees 2B). 0 = dynamic."),
+    ] = 0,
+    num_keypoints: Annotated[
+        int,
+        typer.Option("-k", "--num-keypoints", min=0, help="Keypoints per image N. 0 = dynamic."),
+    ] = 0,
+    opset: Annotated[int, typer.Option(min=16, max=20)] = 17,
+    fp16: Annotated[bool, typer.Option("--fp16", help="Also emit an FP16 copy (do NOT use for TensorRT).")] = False,
+):
+    """Export standalone LightGlue matcher to ONNX.
+
+    Inputs:  keypoints (2B, N, 2) normalized to [-1, 1],  descriptors (2B, N, D)
+    Outputs: matches (M, 3),  mscores (M,)
+    """
+    import onnx
+    import torch
+    from onnxruntime.tools.symbolic_shape_infer import SymbolicShapeInference
+    from onnxruntime.transformers.float16 import convert_float_to_float16
+
+    from lightglue_dynamo.models import LightGlue
+
+    lg_cfg = extractor_type.lightglue_config
+    if lg_cfg is None:
+        raise typer.BadParameter(
+            f"No standalone LightGlue weights for {extractor_type}. Use superpoint, aliked, or disk."
+        )
+    input_dim = lg_cfg.get("input_dim", 256)
+
+    if output is None:
+        output = Path(f"weights/{extractor_type}_lightglue.onnx")
+
+    matcher = LightGlue(**lg_cfg).eval()
+
+    dummy_b = (batch_size or 1) * 2
+    dummy_n = num_keypoints or 512
+    dummy_kpts = torch.rand(dummy_b, dummy_n, 2) * 2 - 1
+    dummy_desc = torch.randn(dummy_b, dummy_n, input_dim)
+
+    dynamic_axes: dict[str, dict[int, str]] = {
+        "keypoints": {},
+        "descriptors": {},
+        "matches": {0: "num_matches"},
+        "mscores": {0: "num_matches"},
+    }
+    if batch_size == 0:
+        dynamic_axes["keypoints"][0] = "two_batch_size"
+        dynamic_axes["descriptors"][0] = "two_batch_size"
+    if num_keypoints == 0:
+        dynamic_axes["keypoints"][1] = "num_keypoints"
+        dynamic_axes["descriptors"][1] = "num_keypoints"
+
+    typer.echo(f"Exporting standalone LightGlue for {extractor_type} (input_dim={input_dim}) -> {output}")
+    torch.onnx.export(
+        matcher,
+        (dummy_kpts, dummy_desc),
+        str(output),
+        input_names=["keypoints", "descriptors"],
+        output_names=["matches", "mscores"],
+        opset_version=opset,
+        dynamic_axes=dynamic_axes,
+        do_constant_folding=True,
+    )
+
+    model = onnx.load(output)
+    model = onnx.shape_inference.infer_shapes(model)
+    model = SymbolicShapeInference.infer_shapes(model, auto_merge=True)
+    onnx.save(model, str(output))
+    typer.echo(f"Successfully exported model to {output}")
+
+    if fp16:
+        fp16_output = output.with_suffix(".fp16.onnx")
+        onnx.save_model(convert_float_to_float16(onnx.load_model(output)), fp16_output)
+        typer.echo(f"Successfully converted model to {fp16_output}")
+
+
 @app.command()
 def infer(
     model_path: Annotated[Path, typer.Argument(exists=True, dir_okay=False, readable=True, help="Path to ONNX model.")],

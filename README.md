@@ -209,6 +209,14 @@ python dynamo.py trtexec \
   -h 384 -w 640 \
   --fp16 \
   --profile
+
+python dynamo.py trtexec \
+  weights/aliked_n16_h480_w768_kp512_simplify.onnx \
+  assets/DSC_0410.JPG \
+  -e aliked_n16 \
+  -h 480 -w 768 \
+  --fp16 \
+  --profile
 ```
 
 5. Dont use dla, cant work
@@ -227,6 +235,24 @@ python dynamo.py trtexec \
 /usr/src/tensorrt/bin/trtexec --loadEngine=./weights/superpoint_open_b2_h400_w640_kp256_dla.engine --useDLACore=0 --allowGPUFallback --dumpProfile
 ```
 
+6. Lightglue
+```
+python export.py \
+  --extractor_type superpoint \
+  --matcher_only \
+  --lightglue_weights weights/superpoint_lightglue.pth \
+  --max_num_keypoints 256 \
+  --lightglue_path weights/superpoint_lightglue_matcher.onnx
+```
+
+```
+python export.py \
+  --extractor_type aliked \
+  --matcher_only \
+  --lightglue_weights weights/aliked_lightglue.pth \
+  --max_num_keypoints 256 \
+  --lightglue_path weights/aliked_lightglue_matcher.onnx
+```
 <details>
 <summary>🟣 ONNX Runtime Inference (OpenVINO)</summary>
 <pre>

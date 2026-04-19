@@ -247,9 +247,10 @@ class LightGlue(nn.Module):
     features = {
         "superpoint": ("superpoint_lightglue", 256),
         "disk": ("disk_lightglue", 128),
+        "aliked": ("aliked_lightglue", 128),
     }
 
-    def __init__(self, features="superpoint", **conf) -> None:
+    def __init__(self, features="superpoint", weights_path: Optional[str] = None, **conf) -> None:
         super().__init__()
         self.conf = {**self.default_conf, **conf}
         if features is not None:
@@ -280,7 +281,10 @@ class LightGlue(nn.Module):
         )
 
         state_dict = None
-        if features is not None:
+        if weights_path is not None:
+            print(f"Loading LightGlue weights from local path: {weights_path}")
+            state_dict = torch.load(str(weights_path), map_location="cpu")
+        elif features is not None:
             fname = f"{conf.weights}_{self.version}.pth".replace(".", "-")
             state_dict = torch.hub.load_state_dict_from_url(
                 self.url.format(self.version, features), file_name=fname
