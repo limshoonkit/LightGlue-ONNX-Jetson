@@ -1,70 +1,81 @@
-from enum import Enum
+import sys
+from enum import auto
 from typing import Any
 
+if sys.version_info >= (3, 11):
+    from enum import StrEnum
+else:
+    from enum import Enum
 
-class InferenceDevice(str, Enum):
-    # Explicitly assign the string value instead of using auto()
-    cpu = "cpu"
-    cuda = "cuda"
-    tensorrt = "tensorrt"
-    openvino = "openvino"
-
-    def __str__(self) -> str:
-        """Return the string value of the enum member."""
-        return self.value
+    class StrEnum(str, Enum):  # type: ignore[no-redef]
+        @staticmethod
+        def _generate_next_value_(name, start, count, last_values):
+            return name
 
 
-class Extractor(str, Enum):
-    # Explicitly assign the string value instead of using auto()
-    superpoint = "superpoint"
-    superpoint_open = "superpoint_open"
-    disk = "disk"
-    aliked = "aliked"
-    aliked_n16 = "aliked_n16"
-    aliked_n16rot = "aliked_n16rot"
-    aliked_n32 = "aliked_n32"
-    aliked_t16 = "aliked_t16"
+class InferenceDevice(StrEnum):
+    cpu = auto()
+    cuda = auto()
+    tensorrt = auto()
+    openvino = auto()
 
-    def __str__(self) -> str:
-        """Return the string value of the enum member."""
-        return self.value
+
+class Extractor(StrEnum):
+    superpoint = auto()
+    superpoint_open = auto()
+    disk = auto()
+    aliked = auto()
+    aliked_n16 = auto()
+    aliked_n16rot = auto()
+    aliked_n32 = auto()
+    aliked_t16 = auto()
+    xfeat = auto()
+    raco = auto()
 
     @property
     def input_dim_divisor(self) -> int:
         match self:
-            case Extractor.superpoint:
-                return 8
-            case Extractor.superpoint_open:
+            case Extractor.superpoint | Extractor.superpoint_open:
                 return 8
             case Extractor.disk:
                 return 16
-            case Extractor.aliked | Extractor.aliked_n16 | Extractor.aliked_n16rot | Extractor.aliked_n32 | Extractor.aliked_t16:
+            case (
+                Extractor.aliked
+                | Extractor.aliked_n16
+                | Extractor.aliked_n16rot
+                | Extractor.aliked_n32
+                | Extractor.aliked_t16
+            ):
+                return 32
+            case Extractor.xfeat:
+                return 32
+            case Extractor.raco:
                 return 32
 
     @property
     def input_channels(self) -> int:
         match self:
-            case Extractor.superpoint:
+            case Extractor.superpoint | Extractor.superpoint_open:
                 return 1
-            case Extractor.superpoint_open:
-                return 1
-            case Extractor.disk:
-                return 3
-            case Extractor.aliked | Extractor.aliked_n16 | Extractor.aliked_n16rot | Extractor.aliked_n32 | Extractor.aliked_t16:
+            case Extractor.disk | Extractor.aliked | Extractor.aliked_n16 | Extractor.aliked_n16rot | Extractor.aliked_n32 | Extractor.aliked_t16 | Extractor.xfeat | Extractor.raco:
                 return 3
 
     @property
     def lightglue_config(self) -> dict[str, Any]:
         match self:
-            case Extractor.superpoint:
+            case Extractor.superpoint | Extractor.superpoint_open:
                 return {"url": "https://github.com/cvg/LightGlue/releases/download/v0.1_arxiv/superpoint_lightglue.pth"}
             case Extractor.disk:
                 return {
                     "input_dim": 128,
                     "url": "https://github.com/cvg/LightGlue/releases/download/v0.1_arxiv/disk_lightglue.pth",
                 }
-            case Extractor.aliked:
+            case Extractor.aliked | Extractor.aliked_n16 | Extractor.aliked_n16rot | Extractor.aliked_n32 | Extractor.aliked_t16:
                 return {
                     "input_dim": 128,
                     "url": "https://github.com/cvg/LightGlue/releases/download/v0.1_arxiv/aliked_lightglue.pth",
                 }
+            case Extractor.xfeat:
+                return {"input_dim": 64}
+            case Extractor.raco:
+                return {"input_dim": 128}

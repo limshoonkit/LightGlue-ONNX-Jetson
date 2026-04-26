@@ -1,54 +1,84 @@
-[tool.poetry]
+[project]
 name = "lightglue-onnx"
 version = "2.0.0"
-description = "ONNX-compatible LightGlue: Local Feature Matching at Light Speed. Supports TensorRT, TorchDynamo"
-authors = ["Fabio Milentiansen Sim <fabio.milentiansen.sim@gmail.com>"]
-license = "Apache-2.0"
+description = "ONNX-compatible LightGlue: Local Feature Matching at Light Speed (ONNX Runtime–first export & inference)."
 readme = "README.md"
+requires-python = ">=3.10,<3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Fabio Milentiansen Sim", email = "fabio.milentiansen.sim@gmail.com" }]
+dependencies = [
+    "numpy>=1.26.4,<2",
+    "opencv-python>=4.10.0.84,<5",
+    "matplotlib>=3.9.1,<4",
+    "typer>=0.12.3,<0.13",
+    "click>=8.0,<8.2",
+    "onnx>=1.16.1,<2",
+    "onnxruntime-gpu[cuda,cudnn]>=1.17,<2",
+]
 
-[tool.poetry.dependencies]
-python = ">=3.10, <3.11"
-numpy = "<2.00"
-opencv-python = "^4.10.0.84"
-matplotlib = "^3.9.1"
-typer = "^0.12.3"
-onnxruntime = "^1.17.0"
+[project.scripts]
+lightglue-onnx = "lightglue_dynamo.cli:main"
 
-[tool.poetry.group.export.dependencies]
-onnx = "^1.16.1"
-onnxscript = "^0.1.0.dev20240708"
+[dependency-groups]
+export = [
+    "kornia>=0.7,<1",
+    "onnx-ir>=0.2,<1",
+    "onnxscript>=0.1,<0.2",
+    "tqdm>=4.66,<5",
+    "torch>=2.2,<3",
+    "torchvision>=0.17,<1",
+]
+notebook = [
+    { include-group = "export" },
+    "ipykernel>=6.30.1,<7",
+    "jupyter>=1.0,<2",
+]
+dev = [
+    "ipykernel>=6.30.1,<7",
+    { include-group = "export" },
+]
 
-
-[tool.poetry.group.dev.dependencies]
-ipykernel = "^6.30.1"
+[tool.uv.build-backend]
+module-name = "lightglue_dynamo"
+module-root = ""
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.9.13,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+addopts = """
+-n auto
+"""
 
 [tool.ruff]
-target-version = "py310"
 line-length = 120
+target-version = "py312"
 
 [tool.ruff.lint]
 select = [
-    "F",  # pyflakes
-    "E",  # pycodestyle errors
-    "W",  # pycodestyle warnings
-    "I",  # isort
-    "B",  # flake8-bugbear
-    "A",  # flake8-builtins
-    "C4",  # flake8-comprehensions
-    "UP",  # pyupgrade
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # Pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
     "SIM",  # flake8-simplify
-    "PLC",  # pylint
-    "PLE",  # pylint
-    "PLW",  # pylint
-    "NPY",  # numpy
+    "ANN",  # flake8-annotations
+    "UP",   # pyupgrade
     "RUF",  # ruff
-    "PERF",  # perflint
+    "FURB", # refurb
 ]
 ignore = [
-    "E501",  # line too long, handled by black
-    "W191",  # indentation contains tabs
+    "E501",  # line too long (handled by formatter)
+    "E731",  # do not assign a lambda expression, use a def
 ]
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = false
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.ruff.format]
+skip-magic-trailing-comma = true

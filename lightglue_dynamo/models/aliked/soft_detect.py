@@ -74,15 +74,14 @@ class DKD(nn.Module):
         )
         # self.get_patches_func = get_patches_script if script else get_patches.apply
 
-        # local xy grid
-        x = torch.linspace(-self.radius, self.radius, self.kernel_size)
-        # (kernel_size*kernel_size) x 2 : (w,h)
-        self.hw_grid = (
-            torch.stack(torch.meshgrid([x, x])).view(2, -1).t()[:, [1, 0]]
-        ).to("cuda")
-        # self.hw_grid = (
-        #     torch.stack(torch.meshgrid([x, x])).view(2, -1).t()[:, [1, 0]]
-        # ).to("cuda").half()
+        # local xy grid (buffer follows module device; avoids hard-coded CUDA)
+        lin = torch.linspace(-self.radius, self.radius, self.kernel_size)
+        try:
+            g0, g1 = torch.meshgrid(lin, lin, indexing="ij")
+        except TypeError:
+            g0, g1 = torch.meshgrid(lin, lin)
+        hw = torch.stack((g0, g1)).view(2, -1).t()[:, [1, 0]]
+        self.register_buffer("hw_grid", hw, persistent=False)
 
     def detect_keypoints(self, scores_map: Tensor, sub_pixel: bool = True):
         b, c, h, w = scores_map.shape

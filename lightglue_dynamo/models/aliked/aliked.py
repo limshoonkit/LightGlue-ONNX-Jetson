@@ -1,4 +1,6 @@
 import os.path as osp
+from typing import Optional
+
 import torch
 from torch import nn
 from torchvision.models import resnet
@@ -98,7 +100,7 @@ class ALIKED(nn.Module):
         if pretrained_path: # Check if a path was provided
             if osp.exists(pretrained_path):
                 print(f'loading {pretrained_path}')
-                state_dict = torch.load(pretrained_path, 'cpu')
+                state_dict = torch.load(pretrained_path, map_location="cpu")
                 self.load_state_dict(state_dict, strict=True)
                 self.to(device)
                 self.eval()
@@ -139,20 +141,23 @@ class ALIKED(nn.Module):
         return feature_map, score_map
 
     def forward(self, image):
-        torch.cuda.synchronize()
-        t0 = time.time() 
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        t0 = time.time()
         feature_map, score_map = self.extract_dense_map(image)
         keypoints, kptscores, scoredispersitys = self.dkd(score_map)
         descriptors, offsets = self.desc_head(feature_map, keypoints)
-        torch.cuda.synchronize()
-        t1 = time.time()        
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        t1 = time.time()
 
-        return {'keypoints': keypoints,  # B N 2
-            'descriptors': descriptors,  # B N D
-            'scores': kptscores,  # B N
-            'score_dispersity': scoredispersitys,
-            'score_map': score_map,  # Bx1xHxW
-            'time': t1-t0,
+        return {
+            "keypoints": keypoints,  # B N 2
+            "descriptors": descriptors,  # B N D
+            "scores": kptscores,  # B N
+            "score_dispersity": scoredispersitys,
+            "score_map": score_map,  # Bx1xHxW
+            "time": t1 - t0,
         }
     
     def run(self, img_rgb):

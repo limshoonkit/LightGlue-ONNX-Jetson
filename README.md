@@ -4,21 +4,24 @@
 [![TensorRT](https://img.shields.io/badge/TensorRT-76B900)](https://developer.nvidia.com/tensorrt)
 [![GitHub Repo stars](https://img.shields.io/github/stars/fabio-sim/LightGlue-ONNX)](https://github.com/fabio-sim/LightGlue-ONNX/stargazers)
 [![GitHub all releases](https://img.shields.io/github/downloads/fabio-sim/LightGlue-ONNX/total)](https://github.com/fabio-sim/LightGlue-ONNX/releases)
-[![Blog](https://img.shields.io/badge/Blog-blue)](https://fabio-sim.github.io/blog/accelerating-lightglue-inference-onnx-runtime-tensorrt/)
+[![Blog](https://img.shields.io/badge/Blog-blue)](https://fabio-sim.github.io)
 
 # LightGlue ONNX
 
-Open Neural Network Exchange (ONNX) compatible implementation of [LightGlue: Local Feature Matching at Light Speed](https://github.com/cvg/LightGlue). The ONNX model format allows for interoperability across different platforms with support for multiple execution providers, and removes Python-specific dependencies such as PyTorch. Supports TensorRT and OpenVINO.
+Open Neural Network Exchange (ONNX) compatible implementation of [LightGlue: Local Feature Matching at Light Speed](https://github.com/cvg/LightGlue). The ONNX model format allows for interoperability across different platforms with support for multiple execution providers, and removes Python-specific dependencies such as PyTorch. Supports TensorRT and OpenVINO. [Detailed write-up](https://fabio-sim.github.io).
 
-> ✨ ***What's New***: End-to-end parallel dynamic batch size support. Read more in this [blog post](https://fabio-sim.github.io/blog/accelerating-lightglue-inference-onnx-runtime-tensorrt/).
+> ✨ ***What's New***: FP8 Quantization Workflow. Read more in this [blog post](https://fabio-sim.github.io/blog/fp8-quantized-lightglue-tensorrt-nvidia-model-optimizer/).
 
 <p align="center"><a href="https://fabio-sim.github.io/blog/accelerating-lightglue-inference-onnx-runtime-tensorrt/"><img src="assets/inference-comparison-speedup.svg" alt="Latency Comparison" width=90%></a><br><em>⏱️ Inference Time Comparison</em></p>
 
 <p align="center"><a href="https://arxiv.org/abs/2306.13643"><img src="assets/easy_hard.jpg" alt="LightGlue figure" width=80%></a></p>
 
+**19 January 2026**: Add FP8 quantization workflow (ModelOpt Q/DQ export and TensorRT usage notes).
+
 <details>
 <summary>Changelog</summary>
 
+- **09 January 2026**: Refurbish the CLI UX with modern uv, streamline the `lightglue-onnx` workflow, and remove deprecated stacks while refreshing dependencies and TensorRT/shape-inference guidance.
 - **17 July 2024**: End-to-end parallel dynamic batch size support. Revamp script UX. Add [blog post](https://fabio-sim.github.io/blog/accelerating-lightglue-inference-onnx-runtime-tensorrt/).
 - **02 November 2023**: Introduce TopK-trick to optimize out ArgMax for about 30% speedup.
 - **04 October 2023:** Fused LightGlue ONNX Models with support for FlashAttention-2 via `onnxruntime>=1.16.0`, up to 80% faster inference on long sequence lengths (number of keypoints).
@@ -35,12 +38,49 @@ Open Neural Network Exchange (ONNX) compatible implementation of [LightGlue: Loc
 
 ## ⭐ ONNX Export & Inference
 
-We provide a [typer](https://github.com/tiangolo/typer) CLI [`dynamo.py`](dynamo.py) to easily export LightGlue to ONNX and perform inference using ONNX Runtime. If you would like to try out inference right away, you can download ONNX models that have already been exported [here](https://github.com/fabio-sim/LightGlue-ONNX/releases).
+We provide a [typer](https://github.com/tiangolo/typer) CLI `lightglue-onnx` to easily export LightGlue to ONNX and perform inference using ONNX Runtime. If you would like to try out inference right away, you can download ONNX models that have already been exported [here](https://github.com/fabio-sim/LightGlue-ONNX/releases).
+
+## 📦 Installation (uv)
+
+Inference-only (default):
 
 ```shell
-$ python dynamo.py --help
+uv sync
+```
 
-Usage: dynamo.py [OPTIONS] COMMAND [ARGS]...
+Export support (adds PyTorch + ONNX):
+
+```shell
+uv sync --group export
+```
+
+TensorRT CLI support:
+
+```shell
+uv sync --group trt
+```
+
+
+### Install for jetson (after uv)
+
+```
+uv pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu126
+```
+
+```
+export CUDA_VERSION=12.6 
+bash ./install_cusparselt.sh
+```
+
+```
+uv pip install --no-cache https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl
+export PYTHONPATH=/usr/lib/python3.10/dist-packages:$PYTHONPATH # to enable tensorrt in virtualenv
+```
+
+```shell
+$ uv run lightglue-onnx --help
+
+Usage: lightglue-onnx [OPTIONS] COMMAND [ARGS]...
 
 LightGlue Dynamo CLI
 
@@ -52,34 +92,22 @@ LightGlue Dynamo CLI
 ╰──────────────────────────────────────────────────╯
 ```
 
-Pass `--help` to see the available options for each command. The CLI will export the full extractor-matcher pipeline so that you don't have to worry about orchestrating intermediate steps.
+Pass `--help` to see the available options for each command. The CLI will export the full extractor-matcher pipeline so that you don't have to worry about orchestrating intermediate steps. By default, inference uses CUDA when available and falls back to CPU if the requested provider cannot be loaded.
 
-## Install
-```
-poetry install
-source .venv/bin/activate
-source /home/ubuntu/.cache/pypoetry/virtualenvs/lightglue-onnx-sgmjQlQ8-py3.10/bin/activate
-```
+### GPU Prerequisites
+The ONNX Runtime CUDA and TensorRT execution providers require compatible CUDA and cuDNN versions for your platform. If you encounter provider loading errors, confirm your CUDA/cuDNN setup against the ONNX Runtime CUDA provider documentation.
+If you install CUDA/TensorRT runtime libraries via PyPI (e.g. `onnxruntime-gpu[cuda,cudnn]` and `tensorrt`), you may need to add the venv paths to `LD_LIBRARY_PATH` so Polygraphy and the TensorRT EP can find `libcudart.so` and `libnvinfer.so`:
 
-```
-pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu126
+```shell
+export LD_LIBRARY_PATH="$PWD/.venv/lib/python3.12/site-packages/tensorrt_libs:$PWD/.venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:${LD_LIBRARY_PATH:-}"
 ```
 
-```
-export CUDA_VERSION=12.6 
-bash ./install_cusparselt.sh
-```
-
-```
-pip install --no-cache https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl
-export PYTHONPATH=/usr/lib/python3.10/dist-packages:$PYTHONPATH # to enable tensorrt in virtualenv
-```
 ## 📖 Example Commands
 
 <details>
 <summary>🔥 ONNX Export</summary>
 <pre>
-python dynamo.py export superpoint \
+uv run lightglue-onnx export superpoint \
   --num-keypoints 1024 \
   -b 2 -h 1024 -w 1024 \
   -o weights/superpoint_lightglue_pipeline.onnx
@@ -87,9 +115,20 @@ python dynamo.py export superpoint \
 </details>
 
 <details>
+<summary>🧰 Legacy Export Fallback</summary>
+<pre>
+uv run lightglue-onnx export superpoint \
+  --num-keypoints 1024 \
+  -b 2 -h 1024 -w 1024 \
+  --legacy-export \
+  -o weights/superpoint_lightglue_pipeline.onnx
+</pre>
+</details>
+
+<details>
 <summary>⚡ ONNX Runtime Inference (CUDA)</summary>
 <pre>
-python dynamo.py infer \
+uv run lightglue-onnx infer \
   weights/superpoint_lightglue_pipeline.onnx \
   assets/sacre_coeur1.jpg assets/sacre_coeur2.jpg \
   superpoint \
@@ -101,7 +140,7 @@ python dynamo.py infer \
 <details>
 <summary>🚀 ONNX Runtime Inference (TensorRT)</summary>
 <pre>
-python dynamo.py infer \
+uv run lightglue-onnx infer \
   weights/superpoint_lightglue_pipeline.trt.onnx \
   assets/sacre_coeur1.jpg assets/sacre_coeur2.jpg \
   superpoint \
@@ -113,7 +152,7 @@ python dynamo.py infer \
 <details>
 <summary>🧩 TensorRT Inference</summary>
 <pre>
-python dynamo.py trtexec \
+uv run lightglue-onnx trtexec \
   weights/superpoint_lightglue_pipeline.trt.onnx \
   assets/sacre_coeur1.jpg assets/sacre_coeur2.jpg \
   superpoint \
@@ -122,141 +161,39 @@ python dynamo.py trtexec \
 </pre>
 </details>
 
-1. SP+LG pipeline
-```
-python dynamo.py export superpoint \
-  --num-keypoints 256 \
-  -b 2 -h 400 -w 640 \
-  -o weights/superpoint_lightglue_b2_h400_w640_kp256.onnx
-```
+<details>
+<summary>🧪 Quantization (FP8 Q/DQ for TensorRT)</summary>
+<pre>
+# 1) Export a static-shape ONNX model
+uv run lightglue-onnx export superpoint \
+  --num-keypoints 1024 \
+  -b 2 -h 1024 -w 1024 \
+  -o weights/superpoint_lightglue_pipeline.static.onnx
 
-2a. SP only (MIT License)
-```
-python dynamo.py export superpoint_open \
-  --num-keypoints 256 \
-  -b 2 -h 360 -w 640 \
-  -o weights/superpoint_open_b2_h360_w640_kp256.onnx
-```
+# 2) Quantize to FP8 (DQ-only graph)
+uv run lightglue_dynamo/scripts/quantize.py \
+  --input weights/superpoint_lightglue_pipeline.static.onnx \
+  --output weights/superpoint_lightglue_pipeline.static.fp8.onnx \
+  --extractor superpoint \
+  --height 1024 --width 1024 \
+  --quantize-mode fp8 \
+  --dq-only \
+  --simplify
 
-2b. ALIKED (from https://github.com/ajuric/aliked-tensorrt/tree/main)
-```
-python dynamo.py export aliked_n16 \
-  --num-keypoints 512 \
-  -b 2 -h 384 -w 640 \
-  -o weights/aliked_n16_b2_h384_w640_kp512.onnx
-```
-
-3a. Note: Does not work for INT8
-```
-python cast_onnx.py # change path
-python dynamo.py trtexec \
-  weights/superpoint_lightglue.onnx \
-  assets/debug1.png assets/debug2.png \
+# 3) Run TensorRT (explicit quantized model)
+uv run lightglue-onnx trtexec \
+  weights/superpoint_lightglue_pipeline.static.fp8.onnx \
+  assets/sacre_coeur1.jpg assets/sacre_coeur2.jpg \
   superpoint \
-  -h 400 -w 640 \
-  --int8 \
-  --calib-image-dir calib_images/ \
-  --calib-cache weights/calib.cache \
-  --profile
-```
+  -h 1024 -w 1024 \
+  --precision-constraints prefer --fp16
+</pre>
+</details>
 
-3b. Simplify onnx
-```
-onnxsim ./weights/superpoint_open_b2_h360_w640_kp256.onnx ./weights/superpoint_open_b2_h360_w640_kp256_simplify.onnx
-```
-
-```
-onnxsim ./weights/aliked_n16_b2_h384_w640_kp256.onnx ./weights/aliked_n16_b2_h384_w640_kp256_simplify.onnx
-```
-
-4. Export engine
-```
-python dynamo.py trtexec \
-  weights/superpoint_lightglue_b2_h400_w640_kp128.onnx \
-  assets/debug1.png assets/debug2.png \
-  -e superpoint \
-  -h 400 -w 640 \
-  --fp16 \
-  --profile
-```
-
-```
-python dynamo.py trtexec \
-  weights/superpoint_open_b2_h360_w640_kp256_simplify.onnx \
-  assets/debug1.png assets/debug2.png \
-  -e superpoint_open \
-  --height 360 \
-  --width 640 \
-  --fp16 \
-  --profile
-
-python dynamo.py trtexec \
-  weights/superpoint_open_h360_w640_kp256_simplify.onnx \
-  assets/debug1.png \
-  -e superpoint_open \
-  --height 360 \
-  --width 640 \
-  --fp16 \
-  --profile
-
-```
-
-```
-python dynamo.py trtexec \
-  weights/aliked_n16_b2_h384_w640_kp512_simplify.onnx \
-  assets/DSC_0410.JPG assets/DSC_0411.JPG \
-  -e aliked_n16 \
-  -h 384 -w 640 \
-  --fp16 \
-  --profile
-
-python dynamo.py trtexec \
-  weights/aliked_n16_h480_w768_kp512_simplify.onnx \
-  assets/DSC_0410.JPG \
-  -e aliked_n16 \
-  -h 480 -w 768 \
-  --fp16 \
-  --profile
-```
-
-5. Dont use dla, cant work
-```
-python dynamo.py trtexec \
-  weights/superpoint_open_b2_h400_w640_kp256.onnx \
-  assets/debug1.png assets/debug2.png \
-  superpoint_open \
-  -h 400 -w 640 \
-  --fp16 \
-  --profile
-```
-
-```
-/usr/src/tensorrt/bin/trtexec --loadEngine=./weights/superpoint_open_b2_h400_w640_kp256.engine --fp16 --separateProfileRun --dumpProfile
-/usr/src/tensorrt/bin/trtexec --loadEngine=./weights/superpoint_open_b2_h400_w640_kp256_dla.engine --useDLACore=0 --allowGPUFallback --dumpProfile
-```
-
-6. Lightglue
-```
-python export.py \
-  --extractor_type superpoint \
-  --matcher_only \
-  --lightglue_weights weights/superpoint_lightglue.pth \
-  --max_num_keypoints 256 \
-  --lightglue_path weights/superpoint_lightglue_matcher.onnx
-```
-
-```
-python export.py \
-  --extractor_type aliked \
-  --matcher_only \
-  --lightglue_weights weights/aliked_lightglue.pth \
-  --max_num_keypoints 256 \
-  --lightglue_path weights/aliked_lightglue_matcher.onnx
-```
 <details>
 <summary>🟣 ONNX Runtime Inference (OpenVINO)</summary>
 <pre>
-python dynamo.py infer \
+uv run lightglue-onnx infer \
   weights/superpoint_lightglue_pipeline.onnx \
   assets/sacre_coeur1.jpg assets/sacre_coeur2.jpg \
   superpoint \
