@@ -158,7 +158,7 @@ class XFeat(nn.Module):
         self,
         weights: str | Path | None = None,
         top_k: int = 4096,
-        detection_threshold: float = 0.05,
+        detection_threshold: float = 0.005,
     ) -> None:
         super().__init__()
         self.dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

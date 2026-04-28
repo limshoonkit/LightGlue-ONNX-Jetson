@@ -87,7 +87,12 @@ def configure_aliked_for_export(extractor: nn.Module, max_kps: int) -> nn.Module
 
 
 class SuperPointCvgOnnxWrapper(nn.Module):
-    """Wraps cvg SuperPoint tuple (kpts, scores, desc) with consistent output names."""
+    """Wraps cvg SuperPoint tuple (kpts, scores, desc) with consistent output names.
+
+    The underlying SuperPoint model derives keypoints from integer topk arithmetic and returns
+    them as int64. Downstream TRT runtimes treat the `keypoints` tensor as float32, so we cast
+    here to keep the engine output dtype consistent with every other extractor.
+    """
 
     def __init__(self, model: nn.Module) -> None:
         super().__init__()
@@ -95,7 +100,7 @@ class SuperPointCvgOnnxWrapper(nn.Module):
 
     def forward(self, images: torch.Tensor) -> tuple[torch.Tensor, ...]:
         k, s, d = self.model(images)
-        return k, s, d
+        return k.float(), s, d
 
 
 class DiskOnnxWrapper(nn.Module):
