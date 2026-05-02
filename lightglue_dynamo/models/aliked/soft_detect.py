@@ -94,37 +94,32 @@ class DKD(nn.Module):
         nms_scores[:, :, h - self.radius :, :] = 0
         nms_scores[:, :, :, w - self.radius :] = 0
 
-        # detect keypoints without grad
+        # Fast path used by the ONNX export (configure_aliked_for_export forces top_k > 0):
+        # everything stays as (B, K, ...) tensors, so TRT can batch the postproc and grid_sample
+        # collapses to a single op over (B, 1, H, W) sampled at (B, 1, K, 2).
         if self.top_k > 0:
-            topk = torch.topk(nms_scores.view(b, -1), self.top_k)
-            indices_keypoints = [
-                topk.indices[i] for i in range(b)
-            ]  # B x top_k
-        else:
-            if self.scores_th > 0:
-                masks = nms_scores > self.scores_th
-                if masks.sum() == 0:
-                    th = scores_nograd.reshape(b, -1).mean(
-                        dim=1
-                    )  # th = self.scores_th
-                    masks = nms_scores > th.reshape(b, 1, 1, 1)
-            else:
-                th = scores_nograd.reshape(b, -1).mean(
-                    dim=1
-                )  # th = self.scores_th
-                masks = nms_scores > th.reshape(b, 1, 1, 1)
-            masks = masks.reshape(b, -1)
+            return self._detect_keypoints_topk_batched(scores_map, scores_nograd, nms_scores, sub_pixel)
 
-            indices_keypoints = []  # list, B x (any size)
-            scores_view = scores_nograd.reshape(b, -1)
-            for mask, scores in zip(masks, scores_view):
-                indices = mask.nonzero()[:, 0]
-                if len(indices) > self.n_limit:
-                    kpts_sc = scores[indices]
-                    sort_idx = kpts_sc.sort(descending=True)[1]
-                    sel_idx = sort_idx[: self.n_limit]
-                    indices = indices[sel_idx]
-                indices_keypoints.append(indices)
+        if self.scores_th > 0:
+            masks = nms_scores > self.scores_th
+            if masks.sum() == 0:
+                th = scores_nograd.reshape(b, -1).mean(dim=1)
+                masks = nms_scores > th.reshape(b, 1, 1, 1)
+        else:
+            th = scores_nograd.reshape(b, -1).mean(dim=1)
+            masks = nms_scores > th.reshape(b, 1, 1, 1)
+        masks = masks.reshape(b, -1)
+
+        indices_keypoints = []  # list, B x (any size)
+        scores_view = scores_nograd.reshape(b, -1)
+        for mask, scores in zip(masks, scores_view):
+            indices = mask.nonzero()[:, 0]
+            if len(indices) > self.n_limit:
+                kpts_sc = scores[indices]
+                sort_idx = kpts_sc.sort(descending=True)[1]
+                sel_idx = sort_idx[: self.n_limit]
+                indices = indices[sel_idx]
+            indices_keypoints.append(indices)
 
         wh = torch.tensor([w - 1, h - 1], device=scores_nograd.device)
 
@@ -220,6 +215,75 @@ class DKD(nn.Module):
                 )  # for jit.script compatability
                 kptscores.append(kptscore)
 
+        return keypoints, scoredispersitys, kptscores
+
+    def _detect_keypoints_topk_batched(
+        self,
+        scores_map: Tensor,
+        scores_nograd: Tensor,
+        nms_scores: Tensor,
+        sub_pixel: bool,
+    ):
+        """Vectorised replacement for the per-batch loop when top_k > 0.
+
+        Returns the same (keypoints, scoredispersitys, kptscores) list-of-tensors API as
+        detect_keypoints;
+        """
+        b, _, h, w = scores_map.shape
+        K = self.top_k
+        kk = self.kernel_size * self.kernel_size
+
+        # (B, K) flat indices into the score map. Stays batched throughout.
+        indices_b = torch.topk(nms_scores.view(b, -1), K).indices  # (B, K)
+
+        ix = (indices_b % w).to(scores_map.dtype)
+        iy = torch.div(indices_b, w, rounding_mode="trunc").to(scores_map.dtype)
+        keypoints_xy_nms_b = torch.stack([ix, iy], dim=-1)  # (B, K, 2)
+
+        wh = torch.tensor([w - 1, h - 1], device=scores_nograd.device, dtype=scores_map.dtype)
+
+        if sub_pixel:
+            self.hw_grid = self.hw_grid.to(scores_map)
+
+            # patches: (B, k^2, H*W). Gather K columns per batch in one op.
+            patches = self.unfold(scores_map)
+            gather_idx = indices_b.unsqueeze(1).expand(-1, kk, -1)  # (B, k^2, K)
+            patch_scores = patches.gather(2, gather_idx).transpose(1, 2)  # (B, K, k^2)
+
+            # max detached to avoid backprop loops (matches original code).
+            max_v = patch_scores.max(dim=-1, keepdim=True).values.detach()  # (B, K, 1)
+            x_exp = ((patch_scores - max_v) / self.temperature).exp()       # (B, K, k^2)
+            x_exp_sum = x_exp.sum(dim=-1, keepdim=True)                     # (B, K, 1)
+
+            # Soft-argmax: (B, K, k^2) @ (k^2, 2) / (B, K, 1) -> (B, K, 2)
+            xy_residual_b = (x_exp @ self.hw_grid) / x_exp_sum
+
+            # Score dispersity, batched over (B, K).
+            hw_grid_dist2 = (
+                ((self.hw_grid[None, None, :, :] - xy_residual_b[:, :, None, :]) / self.radius)
+                .norm(dim=-1) ** 2
+            )  # (B, K, k^2)
+            scoredispersity_b = (x_exp * hw_grid_dist2).sum(dim=-1) / x_exp_sum.squeeze(-1)
+
+            keypoints_xy_b = (keypoints_xy_nms_b + xy_residual_b) / wh * 2 - 1  # (B, K, 2)
+        else:
+            keypoints_xy_b = keypoints_xy_nms_b / wh * 2 - 1
+            scoredispersity_b = None  # filled below for jit.script compat
+
+        # Single batched grid_sample: (B, 1, H, W) sampled at (B, 1, K, 2) -> (B, 1, 1, K)
+        kptscore_b = torch.nn.functional.grid_sample(
+            scores_map,
+            keypoints_xy_b.unsqueeze(1),
+            mode="bilinear",
+            align_corners=True,
+        ).view(b, K)
+
+        if scoredispersity_b is None:
+            scoredispersity_b = kptscore_b  # match original sub_pixel=False placeholder
+
+        keypoints = [keypoints_xy_b[i] for i in range(b)]
+        kptscores = [kptscore_b[i] for i in range(b)]
+        scoredispersitys = [scoredispersity_b[i] for i in range(b)]
         return keypoints, scoredispersitys, kptscores
 
     def forward(self, scores_map: Tensor, sub_pixel: bool = True):

@@ -270,6 +270,120 @@ def export_extractor_onnx(
     raise ValueError(f"Unknown extractor_id: {extractor_id!r}")
 
 
+def export_aliked_dense_extractor_onnx(
+    output_path: str | Path,
+    *,
+    aliked_checkpoint: str | Path,
+    model_name: str = "aliked-n16",
+    batch_size: int = 2,
+    height: int = 480,
+    width: int = 768,
+    opset: int = 19,
+    device: str = "cpu",
+) -> None:
+    """Export ALIKED dense headless extractor (backbone + score_head only) to ONNX.
+
+    Inputs:  image (B, 3, H, W)  float32, RGB in [0, 1]
+    Output:  score_map   (B, 1, H, W)    float32
+             feature_map (B, dim, H, W)  float32, L2-normalised
+    """
+    from .wrappers import AlikedDenseExtractorWrapper
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    dev = torch.device(device)
+    eff_opset = max(opset, 19)
+
+    register_deform_conv2d_onnx(eff_opset)
+
+    if model_name not in _ALIKED_NAMES.values():
+        raise ValueError(f"Unknown ALIKED model_name {model_name!r}; expected one of {list(_ALIKED_NAMES.values())}")
+
+    model = ALIKED(
+        model_name=model_name,
+        device=str(dev),
+        pretrained_path=str(Path(aliked_checkpoint)),
+    ).eval().to(dev)
+
+    wrapped = AlikedDenseExtractorWrapper(model).eval().to(dev)
+
+    dummy_image = torch.randn(batch_size, 3, height, width, device=dev)
+
+    torch.onnx.export(
+        wrapped,
+        (dummy_image,),
+        str(out),
+        input_names=["image"],
+        output_names=["score_map", "feature_map"],
+        opset_version=eff_opset,
+        do_constant_folding=True,
+        export_params=True,
+        dynamo=False,
+    )
+    validate_onnx(out)
+
+
+def export_aliked_desc_head_only_onnx(
+    output_path: str | Path,
+    *,
+    aliked_checkpoint: str | Path,
+    model_name: str = "aliked-n16",
+    batch_size: int = 2,
+    height: int = 480,
+    width: int = 768,
+    max_keypoints: int = 256,
+    feature_dim: int = 128,
+    opset: int = 19,
+    device: str = "cpu",
+) -> None:
+    """Export ALIKED desc-head-only ONNX (no backbone, vectorised SDDH).
+
+    Used as Engine B in the three-stage pipeline. Pairs with the dense headless
+    extractor whose feature_map output feeds directly into this engine, eliminating
+    the redundant backbone pass that the legacy ``aliked_n16_describe`` engine
+    incurs.
+
+    Inputs:  feature_map (B, feature_dim, H, W)  float32
+             kpts_n      (B, K, 2)               float32, in [-1, 1] (x, y) order
+    Output:  descriptors (B, K, feature_dim)     float32, L2-normalised
+    """
+    from .wrappers import AlikedDescHeadOnlyWrapper
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    dev = torch.device(device)
+    eff_opset = max(opset, 19)
+
+    register_deform_conv2d_onnx(eff_opset)
+
+    if model_name not in _ALIKED_NAMES.values():
+        raise ValueError(f"Unknown ALIKED model_name {model_name!r}; expected one of {list(_ALIKED_NAMES.values())}")
+
+    model = ALIKED(
+        model_name=model_name,
+        device=str(dev),
+        pretrained_path=str(Path(aliked_checkpoint)),
+    ).eval().to(dev)
+
+    wrapped = AlikedDescHeadOnlyWrapper(model).eval().to(dev)
+
+    dummy_feature_map = torch.randn(batch_size, feature_dim, height, width, device=dev)
+    dummy_kpts_n = torch.empty(batch_size, max_keypoints, 2, device=dev).uniform_(-0.9, 0.9)
+
+    torch.onnx.export(
+        wrapped,
+        (dummy_feature_map, dummy_kpts_n),
+        str(out),
+        input_names=["feature_map", "kpts_n"],
+        output_names=["descriptors"],
+        opset_version=eff_opset,
+        do_constant_folding=True,
+        export_params=True,
+        dynamo=False,
+    )
+    validate_onnx(out)
+
+
 def export_aliked_describe_onnx(
     output_path: str | Path,
     *,

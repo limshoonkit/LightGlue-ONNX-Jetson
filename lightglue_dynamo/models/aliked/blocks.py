@@ -208,6 +208,80 @@ class SDDH(nn.Module):
             self.convM = nn.Conv2d(dims*n_pos, dims, kernel_size=1, stride=1, padding=0, bias=False)
 
 
+    def forward_batched_fixed_k(self, x, kpts_n):
+        """Vectorised SDDH for fixed-K, padded inputs — myelin-fusion-friendly at B>=2.
+
+        Replaces the per-batch ``for ib in range(b)`` loop in forward() so the
+        graph stays fully batch-elementwise. Used by AlikedDescHeadOnlyWrapper.
+
+        Inputs
+        ------
+        x       : (B, C, H, W)  feature map
+        kpts_n  : (B, K, 2)     keypoints normalised to [-1, 1] in (x, y) order
+
+        Output
+        ------
+        descs   : (B, K, C)     L2-normalised descriptors
+        """
+        B, C, H, W = x.shape
+        K = kpts_n.shape[1]
+        ks = self.kernel_size
+        n_pos = self.n_pos
+
+        wh = torch.tensor([[float(W - 1), float(H - 1)]], device=x.device, dtype=x.dtype)  # (1, 2)
+        max_offset = float(max(H, W)) / 4.0
+
+        # (B, K, 2) pixel-space (x, y)
+        kpts_wh = (kpts_n / 2 + 0.5) * wh
+
+        # === Patch extraction: (B, K, C, ks, ks) ===
+        # Match the original double-truncation: caller passes kptsi_wh.long(), then get_patches_lg
+        # computes corner = (required_corners - ks/2 + 1).long(). For ks=3 the effective corner
+        # is floor(kpts_wh) - 1, centering the patch on the integer-floored keypoint.
+        kpts_floor = torch.floor(kpts_wh)
+        corner = torch.floor(kpts_floor - ks / 2 + 1)
+        corner_x = torch.clamp(corner[..., 0], 0.0, float(W - 1 - ks))
+        corner_y = torch.clamp(corner[..., 1], 0.0, float(H - 1 - ks))
+        corner_xy = torch.stack([corner_x, corner_y], dim=-1)  # (B, K, 2)
+
+        off = torch.arange(0, ks, device=x.device, dtype=x.dtype)
+        row_idx, col_idx = torch.meshgrid(off, off, indexing="ij")
+        grid_offset = torch.stack([col_idx, row_idx], dim=-1)  # (ks, ks, 2) = (x, y)
+
+        abs_pos = corner_xy[:, :, None, None, :] + grid_offset[None, None, :, :, :]  # (B, K, ks, ks, 2)
+        abs_pos_n = 2.0 * abs_pos / wh - 1.0
+        grid = abs_pos_n.view(B, K * ks, ks, 2)
+
+        patches = F.grid_sample(x, grid, mode="bilinear", align_corners=True)  # (B, C, K*ks, ks)
+        patches = patches.view(B, C, K, ks, ks).permute(0, 2, 1, 3, 4).contiguous()  # (B, K, C, ks, ks)
+        patches_flat = patches.view(B * K, C, ks, ks)
+
+        # === Deformable offsets ===
+        offset = self.offset_conv(patches_flat).clamp(-max_offset, max_offset)  # (B*K, 2*n_pos, 1, 1)
+        if self.mask:
+            raise NotImplementedError("forward_batched_fixed_k does not support mask=True")
+        offset = offset[:, :, 0, 0].view(B * K, 2, n_pos).permute(0, 2, 1)  # (B*K, n_pos, 2)
+        offset = offset.view(B, K, n_pos, 2)
+
+        # === Sample positions for deformable features ===
+        pos = kpts_wh.unsqueeze(2) + offset  # (B, K, n_pos, 2)
+        pos_n = 2.0 * pos / wh - 1.0
+        grid2 = pos_n.reshape(B, K * n_pos, 1, 2)
+        features = F.grid_sample(x, grid2, mode="bilinear", align_corners=True)  # (B, C, K*n_pos, 1)
+        features = features.view(B, C, K, n_pos).permute(0, 2, 1, 3).contiguous()  # (B, K, C, n_pos)
+        features_flat = features.view(B * K, C, n_pos, 1)
+        features_flat = torch.selu(self.sf_conv(features_flat)).squeeze(-1)  # (B*K, C, n_pos)
+
+        # === Aggregate ===
+        if not self.conv2D:
+            descs = torch.einsum('ncp,pcd->nd', features_flat, self.agg_weights)  # (B*K, C)
+        else:
+            features_r = features_flat.reshape(B * K, -1)[:, :, None, None]
+            descs = self.convM(features_r).squeeze(-1).squeeze(-1)
+
+        descs = F.normalize(descs, p=2.0, dim=1)
+        return descs.view(B, K, C)
+
     def forward(self, x, keypoints):
         # x: [B,C,H,W]
         # keypoints: list, [[N_kpts,2], ...] (w,h)

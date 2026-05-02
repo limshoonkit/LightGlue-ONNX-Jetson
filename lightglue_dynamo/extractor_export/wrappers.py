@@ -113,6 +113,56 @@ class DiskOnnxWrapper(nn.Module):
         return k, s, d
 
 
+class AlikedDenseExtractorWrapper(nn.Module):
+    """ALIKED dense headless extractor for fixed-shape ONNX export.
+
+    Backbone + score_head only. No DKD top-k / NMS / sub-pixel and no desc_head.
+    Postproc runs in a custom CUDA kernel downstream so myelin keeps fusion at B=2.
+
+    Inputs
+    ------
+    image : (B, 3, H, W)  float32, RGB in [0, 1]
+
+    Outputs
+    -------
+    score_map   : (B, 1, H, W)    float32, sigmoid-activated
+    feature_map : (B, dim, H, W)  float32, L2-normalised along the channel dim
+    """
+
+    def __init__(self, model: nn.Module) -> None:
+        super().__init__()
+        self.model = model
+
+    def forward(self, image: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        feature_map, score_map = self.model.extract_dense_map(image)
+        return score_map, feature_map
+
+
+class AlikedDescHeadOnlyWrapper(nn.Module):
+    """ALIKED desc-head-only: (feature_map, kpts_n) -> descriptors.
+
+    Skips the backbone. Pairs with the dense headless extractor: that engine produces
+    feature_map; this one computes descriptors at fixed-K external keypoints. Uses the
+    vectorised SDDH path so myelin keeps fusion at B>=2.
+
+    Inputs
+    ------
+    feature_map : (B, dim, H, W)  L2-normalised feature map from dense extractor
+    kpts_n      : (B, K, 2)       keypoints normalised to [-1, 1] in (x, y) order
+
+    Output
+    ------
+    descriptors : (B, K, dim)     L2-normalised SDDH descriptors
+    """
+
+    def __init__(self, model: nn.Module) -> None:
+        super().__init__()
+        self.model = model
+
+    def forward(self, feature_map: torch.Tensor, kpts_n: torch.Tensor) -> torch.Tensor:
+        return self.model.desc_head.forward_batched_fixed_k(feature_map, kpts_n)
+
+
 class AlikedDescribeWrapper(nn.Module):
     """ALIKED-n16 describe-at-external-keypoints for fixed-K ONNX export.
 
