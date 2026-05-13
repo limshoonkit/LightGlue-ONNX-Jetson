@@ -13,7 +13,6 @@ dependencies = [
     "typer>=0.12.3,<0.13",
     "click>=8.0,<8.2",
     "onnx>=1.16.1,<2",
-    "onnxruntime-gpu[cuda,cudnn]>=1.17,<2",
 ]
 
 [project.scripts]
@@ -36,6 +35,14 @@ notebook = [
 dev = [
     "ipykernel>=6.30.1,<7",
     { include-group = "export" },
+]
+
+[tool.uv.sources]
+torch = [
+    { url = "https://pypi.jetson-ai-lab.io/jp6/cu126/+f/62a/1beee9f2f1470/torch-2.8.0-cp310-cp310-linux_aarch64.whl", marker = "platform_machine == 'aarch64'" },
+]
+torchvision = [
+    { url = "https://pypi.jetson-ai-lab.io/jp6/cu126/+f/907/c4c1933789645/torchvision-0.23.0-cp310-cp310-linux_aarch64.whl", marker = "platform_machine == 'aarch64'" },
 ]
 
 [tool.uv.build-backend]

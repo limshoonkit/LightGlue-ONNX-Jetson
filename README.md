@@ -42,39 +42,61 @@ We provide a [typer](https://github.com/tiangolo/typer) CLI `lightglue-onnx` to 
 
 ## 📦 Installation (uv)
 
-Inference-only (default):
+Install `uv` first (both x86_64 and aarch64):
 
 ```shell
-uv sync
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source $HOME/.local/bin/env
 ```
 
-Export support (adds PyTorch + ONNX):
+The dependency groups are:
+
+| Group       | Command                       | Purpose                                  |
+| ----------- | ----------------------------- | ---------------------------------------- |
+| (default)   | `uv sync`                     | Inference-only (ONNX Runtime)            |
+| `export`    | `uv sync --group export`      | Adds PyTorch + ONNX for model export     |
+| `notebook`  | `uv sync --group notebook`    | Jupyter + export deps                    |
+| `dev`       | `uv sync --group dev`         | Dev tools + export deps                  |
+---
+
+### 🟦 x86_64 (CUDA 12.6)
+
+```shell
+uv sync --group export
+uv pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu126
+uv pip install "onnxruntime-gpu[cuda,cudnn]>=1.17,<2"
+export CUDA_VERSION=12.6
+bash ./install_cusparselt.sh
+```
+
+---
+
+### 🟩 aarch64 / Jetson (JetPack 6.2, CUDA 12.6)
+
+On aarch64 the project resolves PyTorch and torchvision directly from the [Jetson AI Lab](https://pypi.jetson-ai-lab.io/jp6/cu126/) prebuilt wheels via `[tool.uv.sources]` in [pyproject.toml](pyproject.toml), so `uv sync` installs the Jetson-native CUDA builds automatically:
 
 ```shell
 uv sync --group export
 ```
 
-TensorRT CLI support:
+Install the matching Jetson `onnxruntime-gpu` wheel from the [Jetson Zoo](https://elinux.org/Jetson_Zoo#ONNX_Runtime)
 
 ```shell
-uv sync --group trt
+uv pip install --no-cache <onnxruntime_gpu-*-cp310-cp310-linux_aarch64.whl>
+uv pip install --no-cache onnxsim
 ```
 
+Expose system TensorRT + cuDNN bindings to the venv:
 
-### Install for jetson (after uv)
-
-```
-uv pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu126
-```
-
-```
-export CUDA_VERSION=12.6 
-bash ./install_cusparselt.sh
+```shell
+export PYTHONPATH=/usr/lib/python3.10/dist-packages:$PYTHONPATH   # tensorrt in virtualenv
 ```
 
-```
-uv pip install --no-cache https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl
-export PYTHONPATH=/usr/lib/python3.10/dist-packages:$PYTHONPATH # to enable tensorrt in virtualenv
+Sanity check:
+
+```shell
+uv run python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+# 2.8.0  0.23.0  True  Orin
 ```
 
 ```shell
