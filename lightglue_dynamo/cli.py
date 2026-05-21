@@ -173,6 +173,80 @@ def export(
 
 
 @app.command()
+def export_matcher(
+    matcher_type: Annotated[
+        str, typer.Argument(help="Matcher to export: superpoint | aliked | raco | xfeat.")
+    ] = "raco",
+    weights_dir: Annotated[
+        Path,
+        typer.Option(
+            "-w", "--weights-dir", exists=True, file_okay=False,
+            help="Directory holding the matcher .pth/.pt checkpoint.",
+        ),
+    ] = Path("weights"),
+    output: Annotated[
+        Path | None,
+        typer.Option("-o", "--output", dir_okay=False, writable=True, help="Path to save exported ONNX model."),
+    ] = None,
+    num_keypoints: Annotated[
+        int, typer.Option(min=128, help="Fixed keypoint count K (must match the extractor export).")
+    ] = 256,
+    batch_size: Annotated[
+        int,
+        typer.Option(
+            "-b", "--batch-size", min=1,
+            help="Pairs matched per inference. >1 exports the batched (M,3) variant.",
+        ),
+    ] = 1,
+    dynamic_batch: Annotated[
+        bool,
+        typer.Option(
+            "--dynamic-batch",
+            help="Mark the batch axis dynamic so one engine serves any batch size.",
+        ),
+    ] = False,
+    opset: Annotated[int, typer.Option(min=16, max=20, help="ONNX opset version.")] = 17,
+) -> None:
+    """Export a LightGlue / LighterGlue matcher to ONNX (optionally batched).
+
+    With ``--batch-size > 1`` or ``--dynamic-batch`` the batched variant is exported:
+    inputs gain a leading batch axis and ``matches0`` becomes ``(M, 3)`` with a
+    batch-index column, so a single inference matches several pairs at once.
+    """
+    from lightglue_dynamo.matcher_export import MATCHER_REGISTRY, export_matcher_onnx
+
+    if matcher_type not in MATCHER_REGISTRY:
+        raise typer.BadParameter(
+            f"unknown matcher '{matcher_type}', expected one of {sorted(MATCHER_REGISTRY)}"
+        )
+    cfg = MATCHER_REGISTRY[matcher_type]
+    weights_path = weights_dir / cfg["weights"]
+    if not weights_path.is_file():
+        raise typer.BadParameter(f"matcher checkpoint not found: {weights_path}")
+
+    batched = batch_size > 1 or dynamic_batch
+    if output is None:
+        suffix = f"_b{batch_size}" if batched else ""
+        output = Path(f"weights/euroc/{matcher_type}_lightglue{suffix}_kp{num_keypoints}.onnx")
+
+    export_matcher_onnx(
+        weights_path,
+        output,
+        num_keypoints=num_keypoints,
+        input_dim=cfg["input_dim"],
+        descriptor_dim=cfg["descriptor_dim"],
+        num_heads=cfg["num_heads"],
+        n_layers=cfg["n_layers"],
+        state_dict_prefix=cfg["state_dict_prefix"],
+        opset=opset,
+        batch_size=batch_size,
+        dynamic_batch=dynamic_batch,
+    )
+    variant = f"batched (b={batch_size}{', dynamic' if dynamic_batch else ''})" if batched else "single-pair"
+    typer.echo(f"Successfully exported {matcher_type} {variant} matcher to {output}")
+
+
+@app.command()
 def infer(
     model_path: Annotated[Path, typer.Argument(exists=True, dir_okay=False, readable=True, help="Path to ONNX model.")],
     left_image_path: Annotated[

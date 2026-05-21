@@ -78,6 +78,69 @@ class LightGlueExporter(nn.Module):
         return matches[:, 1:], mscores              # (M, 2), (M,)
 
 
+class LightGlueBatchedExporter(nn.Module):
+    """Batched 4-input ONNX export adapter around the dynamo LightGlue.
+
+    Identical to :class:`LightGlueExporter` but accepts a leading batch axis so a
+    single inference can match ``B`` independent pairs at once.  The dynamo core
+    uses a ``(2B, N, *)`` *interleaved* layout — rows ``2i`` and ``2i+1`` form pair
+    ``i`` — so this wrapper interleaves the four per-side tensors into that layout
+    and returns the raw ``(M, 3)`` match output so the caller can demultiplex
+    matches by their batch index.
+
+    I/O contract::
+
+        Inputs:
+          kpts0  (B, K, 2)  isotropic-normalised keypoints, image 0 of each pair
+          kpts1  (B, K, 2)  isotropic-normalised keypoints, image 1 of each pair
+          desc0  (B, K, D)  descriptors, image 0 of each pair
+          desc1  (B, K, D)  descriptors, image 1 of each pair
+
+        Outputs:
+          matches0  (M, 3)  per-match [batch_idx, idx_in_kpts0, idx_in_kpts1]
+          mscores0  (M,)    match confidence scores
+    """
+
+    def __init__(self, core: nn.Module) -> None:
+        super().__init__()
+        self.core = core
+
+    def forward(
+        self,
+        kpts0: torch.Tensor,
+        kpts1: torch.Tensor,
+        desc0: torch.Tensor,
+        desc1: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # Interleave to the dynamo (2B, N, *) layout: pair i -> rows 2i, 2i+1.
+        kpts  = torch.stack([kpts0, kpts1], dim=1).flatten(0, 1)   # (2B, K, 2)
+        descs = torch.stack([desc0, desc1], dim=1).flatten(0, 1)   # (2B, K, D)
+        matches, mscores = self.core(kpts, descs)  # (M, 3), (M,)
+        # Keep the batch-index column so callers can split matches per pair.
+        return matches, mscores                     # (M, 3), (M,)
+
+
+# Per-matcher architecture parameters. Weight filenames are resolved relative to
+# a caller-provided weights directory. Mirrors the registry in
+# notebooks/3-export_trt_matchers.ipynb so the CLI and notebook stay in sync.
+MATCHER_REGISTRY: dict[str, dict] = {
+    "superpoint": dict(weights="superpoint_lightglue.pth",
+                       input_dim=256, descriptor_dim=256, n_layers=9, num_heads=4,
+                       state_dict_prefix=None),
+    "aliked":     dict(weights="aliked_lightglue.pth",
+                       input_dim=128, descriptor_dim=256, n_layers=9, num_heads=4,
+                       state_dict_prefix=None),
+    # Architecturally identical to aliked_lightglue: RaCo keypoints + ALIKED descriptors.
+    "raco":       dict(weights="raco_aliked_lightglue.pth",
+                       input_dim=128, descriptor_dim=256, n_layers=9, num_heads=4,
+                       state_dict_prefix=None),
+    # LighterGlue joint checkpoint: matcher weights live under the "matcher." prefix.
+    "xfeat":      dict(weights="xfeat-lighterglue.pt",
+                       input_dim=64, descriptor_dim=96, n_layers=6, num_heads=1,
+                       state_dict_prefix="matcher."),
+}
+
+
 # ---------------------------------------------------------------------------
 # Public functions
 # ---------------------------------------------------------------------------
@@ -146,11 +209,19 @@ def export_matcher_onnx(
     state_dict_prefix: str | None = None,
     opset: int = 17,
     device: str = "cpu",
+    batch_size: int = 1,
+    dynamic_batch: bool = False,
 ) -> Path:
     """Export a LightGlue / LighterGlue matcher to ONNX.
 
     The exported model has fixed keypoint count ``K = num_keypoints`` and a dynamic
     match-count dimension on the outputs.
+
+    By default a single-pair model is exported (``batch_size=1``): inputs are
+    ``(1, K, *)`` and ``matches0`` is ``(M, 2)``.  With ``batch_size > 1`` or
+    ``dynamic_batch=True`` the *batched* variant is exported instead: inputs are
+    ``(B, K, *)`` and ``matches0`` is ``(M, 3)`` with a leading batch-index column,
+    so one inference matches ``B`` independent pairs.
 
     Parameters
     ----------
@@ -166,6 +237,13 @@ def export_matcher_onnx(
         Key prefix to strip (see :func:`load_lightglue_local`).
     opset:
         ONNX opset version (17 is sufficient for all supported matchers).
+    batch_size:
+        Number of pairs the exported graph matches per inference.  Used as the
+        traced (and, unless ``dynamic_batch``, fixed) batch dimension.
+    dynamic_batch:
+        Mark the input batch axis dynamic so a single engine serves any batch
+        size.  TensorRT still needs an optimisation profile (min/opt/max) at
+        build time.  Implies the batched variant even when ``batch_size == 1``.
     """
     model = load_lightglue_local(
         weights_path,
@@ -177,14 +255,28 @@ def export_matcher_onnx(
         state_dict_prefix=state_dict_prefix,
     ).to(device)
 
+    batched = batch_size > 1 or dynamic_batch
+    if batched:
+        # Rewrap the loaded dynamo core in the batched adapter.
+        model = LightGlueBatchedExporter(model.core).eval().to(device)
+
+    B = max(batch_size, 1)
     K, D = num_keypoints, input_dim
-    kpts0 = torch.rand(1, K, 2, device=device) * 2 - 1
-    kpts1 = torch.rand(1, K, 2, device=device) * 2 - 1
-    desc0 = torch.randn(1, K, D, device=device)
-    desc1 = torch.randn(1, K, D, device=device)
+    kpts0 = torch.rand(B, K, 2, device=device) * 2 - 1
+    kpts1 = torch.rand(B, K, 2, device=device) * 2 - 1
+    desc0 = torch.randn(B, K, D, device=device)
+    desc1 = torch.randn(B, K, D, device=device)
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
+
+    dynamic_axes: dict[str, dict[int, str]] = {
+        "matches0": {0: "num_matches"},
+        "mscores0": {0: "num_matches"},
+    }
+    if dynamic_batch:
+        for name in ("kpts0", "kpts1", "desc0", "desc1"):
+            dynamic_axes[name] = {0: "batch"}
 
     # dynamo=False forces the TorchScript-based exporter (default changed to True in PT 2.9+).
     torch.onnx.export(
@@ -194,7 +286,7 @@ def export_matcher_onnx(
         input_names=["kpts0", "kpts1", "desc0", "desc1"],
         output_names=["matches0", "mscores0"],
         opset_version=opset,
-        dynamic_axes={"matches0": {0: "num_matches"}, "mscores0": {0: "num_matches"}},
+        dynamic_axes=dynamic_axes,
         dynamo=False,
     )
 
