@@ -32,6 +32,7 @@ def build_extractor_trt_engine(
     engine_path: str | Path | None = None,
     *,
     fp16: bool = True,
+    builder_optimization_level: int | None = 5,
 ) -> Path:
     """Build a TensorRT engine from an extractor ONNX model using Polygraphy.
 
@@ -44,6 +45,9 @@ def build_extractor_trt_engine(
         ``.engine`` suffix replacing the original suffix.
     fp16:
         Enable FP16 precision in TensorRT (recommended for Jetson / NVIDIA GPUs).
+    builder_optimization_level:
+        TRT builder optimization level (0-5). Higher = longer build, faster
+        engine. Default 5
     """
     try:
         from polygraphy.backend.trt import (
@@ -67,7 +71,10 @@ def build_extractor_trt_engine(
     build_engine = SaveEngine(
         EngineFromNetwork(
             NetworkFromOnnxPath(str(onnx_path)),
-            config=CreateConfig(fp16=fp16),
+            config=CreateConfig(
+                fp16=fp16,
+                builder_optimization_level=builder_optimization_level,
+            ),
         ),
         str(engine_path),
     )
