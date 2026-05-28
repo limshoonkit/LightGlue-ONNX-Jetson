@@ -73,7 +73,7 @@ def build_extractor_trt_engine(
             NetworkFromOnnxPath(str(onnx_path)),
             config=CreateConfig(
                 fp16=fp16,
-                builder_optimization_level=builder_optimization_level,
+                # builder_optimization_level=builder_optimization_level,
             ),
         ),
         str(engine_path),
