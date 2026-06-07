@@ -134,6 +134,11 @@ MATCHER_REGISTRY: dict[str, dict] = {
     "raco":       dict(weights="raco_aliked_lightglue.pth",
                        input_dim=128, descriptor_dim=256, n_layers=9, num_heads=4,
                        state_dict_prefix=None),
+    # OpenCV SIFT (128-d); posenc uses (x, y, scale, ori). No extractor ONNX export.
+    "sift":       dict(weights="sift_lightglue.pth",
+                       input_dim=128, descriptor_dim=256, n_layers=9, num_heads=4,
+                       keypoint_dim=4, add_scale_ori=True,
+                       state_dict_prefix=None),
     # LighterGlue joint checkpoint: matcher weights live under the "matcher." prefix.
     "xfeat":      dict(weights="xfeat-lighterglue.pt",
                        input_dim=64, descriptor_dim=96, n_layers=6, num_heads=1,
@@ -154,6 +159,7 @@ def load_lightglue_local(
     n_layers: int = 9,
     filter_threshold: float = 0.1,
     state_dict_prefix: str | None = None,
+    add_scale_ori: bool = False,
 ) -> LightGlueExporter:
     """Load LightGlue / LighterGlue from a local checkpoint and wrap for ONNX export.
 
@@ -175,6 +181,9 @@ def load_lightglue_local(
     state_dict_prefix:
         Strip this prefix from all checkpoint keys before loading.  Use ``"matcher."``
         for joint checkpoints such as ``xfeat-lighterglue.pt``.
+    add_scale_ori:
+        When True, build the 4-input positional encoder used by SIFT / DoGHardNet
+        checkpoints (``posenc.Wr`` expects 4-D keypoints: xy + scale + orientation).
     """
     from lightglue_dynamo.models.lightglue import LightGlue
 
@@ -191,6 +200,7 @@ def load_lightglue_local(
             num_heads=num_heads,
             n_layers=n_layers,
             filter_threshold=filter_threshold,
+            add_scale_ori=add_scale_ori,
         )
 
     return LightGlueExporter(core).eval()
@@ -207,6 +217,8 @@ def export_matcher_onnx(
     n_layers: int = 9,
     filter_threshold: float = 0.1,
     state_dict_prefix: str | None = None,
+    add_scale_ori: bool = False,
+    keypoint_dim: int = 2,
     opset: int = 17,
     device: str = "cpu",
     batch_size: int = 1,
@@ -253,6 +265,7 @@ def export_matcher_onnx(
         n_layers=n_layers,
         filter_threshold=filter_threshold,
         state_dict_prefix=state_dict_prefix,
+        add_scale_ori=add_scale_ori,
     ).to(device)
 
     batched = batch_size > 1 or dynamic_batch
@@ -262,8 +275,9 @@ def export_matcher_onnx(
 
     B = max(batch_size, 1)
     K, D = num_keypoints, input_dim
-    kpts0 = torch.rand(B, K, 2, device=device) * 2 - 1
-    kpts1 = torch.rand(B, K, 2, device=device) * 2 - 1
+    kpt_dim = 4 if add_scale_ori else keypoint_dim
+    kpts0 = torch.rand(B, K, kpt_dim, device=device) * 2 - 1
+    kpts1 = torch.rand(B, K, kpt_dim, device=device) * 2 - 1
     desc0 = torch.randn(B, K, D, device=device)
     desc1 = torch.randn(B, K, D, device=device)
 
@@ -291,3 +305,42 @@ def export_matcher_onnx(
     )
 
     return out
+
+
+def export_matcher_from_config(
+    cfg: dict,
+    output_path: str | Path,
+    *,
+    num_keypoints: int = 256,
+    opset: int = 17,
+    device: str = "cpu",
+    batch_size: int = 1,
+    dynamic_batch: bool = False,
+) -> Path:
+    """Export a matcher using a notebook/CLI config dict.
+
+    Expected keys: ``weights``, ``input_dim``, ``desc_dim`` (or ``descriptor_dim``),
+    ``n_layers``, ``num_heads``, ``prefix`` (or ``state_dict_prefix``),
+    optional ``add_scale_ori``, ``kpt_dim`` (or ``keypoint_dim``).
+    """
+    desc_dim = cfg.get("desc_dim", cfg.get("descriptor_dim", 256))
+    prefix = cfg.get("prefix", cfg.get("state_dict_prefix"))
+    kpt_dim = cfg.get("kpt_dim", cfg.get("keypoint_dim", 2))
+    add_scale_ori = bool(cfg.get("add_scale_ori", kpt_dim >= 4))
+
+    return export_matcher_onnx(
+        cfg["weights"],
+        output_path,
+        num_keypoints=num_keypoints,
+        input_dim=cfg["input_dim"],
+        descriptor_dim=desc_dim,
+        num_heads=cfg["num_heads"],
+        n_layers=cfg["n_layers"],
+        state_dict_prefix=prefix,
+        add_scale_ori=add_scale_ori,
+        keypoint_dim=kpt_dim,
+        opset=opset,
+        device=device,
+        batch_size=batch_size,
+        dynamic_batch=dynamic_batch,
+    )

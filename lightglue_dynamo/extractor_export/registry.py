@@ -156,6 +156,16 @@ EXTRACTOR_REGISTRY: dict[str, ExtractorSpec] = {
         ),
         preprocess=_xfeat_pre,
     ),
+    "sift": ExtractorSpec(
+        id="sift",
+        input_name="images",
+        input_channels=1,
+        spatial_divisor=1,
+        min_opset=17,
+        output_names=("keypoints", "keypoint_scores", "descriptors"),
+        notes="OpenCV SIFT (CPU-only). No ONNX export — skip Phase 1. Export only the LightGlue matcher with descriptor_dim=128.",
+        preprocess=lambda img: img,
+    ),
 }
 
 

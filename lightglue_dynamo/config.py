@@ -31,6 +31,7 @@ class Extractor(StrEnum):
     aliked_t16 = auto()
     xfeat = auto()
     raco = auto()
+    sift = auto()
 
     @property
     def input_dim_divisor(self) -> int:
@@ -51,11 +52,13 @@ class Extractor(StrEnum):
                 return 32
             case Extractor.raco:
                 return 32
+            case Extractor.sift:
+                return 1  # SIFT runs in OpenCV; no CNN stride constraint
 
     @property
     def input_channels(self) -> int:
         match self:
-            case Extractor.superpoint | Extractor.superpoint_open:
+            case Extractor.superpoint | Extractor.superpoint_open | Extractor.sift:
                 return 1
             case Extractor.disk | Extractor.aliked | Extractor.aliked_n16 | Extractor.aliked_n16rot | Extractor.aliked_n32 | Extractor.aliked_t16 | Extractor.xfeat | Extractor.raco:
                 return 3
@@ -79,3 +82,8 @@ class Extractor(StrEnum):
                 return {"input_dim": 64}
             case Extractor.raco:
                 return {"input_dim": 128}
+            case Extractor.sift:
+                return {
+                    "input_dim": 128,
+                    "url": "https://github.com/cvg/LightGlue/releases/download/v0.1_arxiv/sift_lightglue.pth",
+                }

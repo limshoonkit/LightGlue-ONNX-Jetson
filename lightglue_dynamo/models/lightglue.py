@@ -187,6 +187,7 @@ class LightGlue(nn.Module):
         filter_threshold: float = 0.1,  # match threshold
         depth_confidence: float = -1,  # -1 is no early stopping, recommend: 0.95
         width_confidence: float = -1,  # -1 is no point pruning, recommend: 0.99
+        add_scale_ori: bool = False,  # SIFT / DoGHardNet: append scale + orientation to posenc
     ) -> None:
         super().__init__()
 
@@ -196,13 +197,15 @@ class LightGlue(nn.Module):
         self.filter_threshold = filter_threshold  # type: ignore[unresolved-attribute]
         self.depth_confidence = depth_confidence  # type: ignore[unresolved-attribute]
         self.width_confidence = width_confidence  # type: ignore[unresolved-attribute]
+        self.add_scale_ori = add_scale_ori  # type: ignore[unresolved-attribute]
 
         if input_dim != self.descriptor_dim:
             self.input_proj = nn.Linear(input_dim, self.descriptor_dim, bias=True)
         else:
             self.input_proj = nn.Identity()
 
-        self.posenc = LearnableFourierPositionalEncoding(2, self.descriptor_dim, self.num_heads)
+        kpt_enc_dim = 2 + 2 * int(add_scale_ori)
+        self.posenc = LearnableFourierPositionalEncoding(kpt_enc_dim, self.descriptor_dim, self.num_heads)
 
         d, h, n = self.descriptor_dim, self.num_heads, self.n_layers
 
@@ -225,7 +228,7 @@ class LightGlue(nn.Module):
 
     def forward(
         self,
-        keypoints: torch.Tensor,  # (2B, N, 2), normalized
+        keypoints: torch.Tensor,  # (2B, N, 2) or (2B, N, 4) when add_scale_ori
         descriptors: torch.Tensor,  # (2B, N, D)
     ) -> tuple[torch.Tensor, torch.Tensor]:
         descriptors = self.input_proj(descriptors)

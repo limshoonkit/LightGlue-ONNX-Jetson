@@ -238,6 +238,8 @@ def export_matcher(
         num_heads=cfg["num_heads"],
         n_layers=cfg["n_layers"],
         state_dict_prefix=cfg["state_dict_prefix"],
+        add_scale_ori=cfg.get("add_scale_ori", False),
+        keypoint_dim=cfg.get("keypoint_dim", 2),
         opset=opset,
         batch_size=batch_size,
         dynamic_batch=dynamic_batch,
