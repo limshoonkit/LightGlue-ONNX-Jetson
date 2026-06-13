@@ -72,6 +72,7 @@ def export_extractor_onnx(
     aliked_checkpoint: str | Path | None = None,
     raco_checkpoint: str | Path | None = None,
     xfeat_checkpoint: str | Path | None = None,
+    covariance: bool = False,
 ) -> None:
     """
     Export a single extractor to ONNX.
@@ -216,10 +217,10 @@ def export_extractor_onnx(
 
     if eid == "raco":
         ck = Path(raco_checkpoint) if raco_checkpoint else wr / "raco.pth"
-        raco = load_raco(ck, max_keypoints=max_keypoints).to(dev)
-        wrapped = RaCoOnnxWrapper(raco).eval().to(dev)
+        raco = load_raco(ck, max_keypoints=max_keypoints, covariance=covariance).to(dev)
+        wrapped = RaCoOnnxWrapper(raco, covariance=covariance).eval().to(dev)
         dummy = torch.randn(b, 3, height, width, device=dev)
-        outs = ["keypoints", "keypoint_scores"]
+        outs = ["keypoints", "keypoint_scores"] + (["covariances"] if covariance else [])
         dynamic_axes = {n: {} for n in ["images", *outs]}
         if dynamic_batch:
             for n in ["images", *outs]:
